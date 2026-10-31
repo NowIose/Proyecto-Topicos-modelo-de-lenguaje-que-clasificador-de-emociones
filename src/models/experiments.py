@@ -74,6 +74,7 @@ def build_logistic_regression_pipeline(
     *,
     random_state: int | None = 42,
     max_iter: int = 1000,
+    ngram_range: tuple[int, int] = (1, 1),
     vectorizer: Any | None = None,
     config: MLConfig | None = None,
     **classifier_kwargs: Any,
@@ -82,14 +83,15 @@ def build_logistic_regression_pipeline(
 
     Cumple el contrato de la fase:
     - Estimador: LogisticRegression con random_state=42 y max_iter=1000.
-    - Transformador: TfidfVectorizer básico (unigramas), configurable o reemplazable.
+    - Transformador: TfidfVectorizer configurable o reemplazable.
 
     Args:
         random_state: Semilla para reproducibilidad. Si se pasa `config`, se
             prioriza `config.experiment.random_seed`. Por defecto 42.
         max_iter: Límite de iteraciones del solver para asegurar convergencia (por defecto 1000).
+        ngram_range: Rango de n-gramas a utilizar si no se pasa `vectorizer` (por defecto unigramas: (1, 1)).
         vectorizer: Transformador opcional compatible con scikit-learn. Si es None,
-            se usa `build_tfidf_vectorizer()`.
+            se usa `build_tfidf_vectorizer(ngram_range=ngram_range)`.
         config: Configuración `MLConfig` opcional para resolver parámetros por defecto.
         **classifier_kwargs: Parámetros adicionales para LogisticRegression.
 
@@ -102,7 +104,11 @@ def build_logistic_regression_pipeline(
         else (random_state if random_state is not None else 42)
     )
 
-    tfidf_step = vectorizer if vectorizer is not None else build_tfidf_vectorizer()
+    tfidf_step = (
+        vectorizer
+        if vectorizer is not None
+        else build_tfidf_vectorizer(ngram_range=ngram_range)
+    )
     classifier_step = LogisticRegression(
         random_state=seed,
         max_iter=max_iter,
@@ -119,6 +125,7 @@ def build_logistic_regression_pipeline(
 
 def build_multinomial_nb_pipeline(
     *,
+    ngram_range: tuple[int, int] = (1, 1),
     vectorizer: Any | None = None,
     **classifier_kwargs: Any,
 ) -> Pipeline:
@@ -126,17 +133,22 @@ def build_multinomial_nb_pipeline(
 
     Cumple el contrato de la fase:
     - Estimador: MultinomialNB determinista.
-    - Transformador: TfidfVectorizer básico (unigramas), configurable o reemplazable.
+    - Transformador: TfidfVectorizer configurable o reemplazable.
 
     Args:
+        ngram_range: Rango de n-gramas a utilizar si no se pasa `vectorizer` (por defecto unigramas: (1, 1)).
         vectorizer: Transformador opcional compatible con scikit-learn. Si es None,
-            se usa `build_tfidf_vectorizer()`.
+            se usa `build_tfidf_vectorizer(ngram_range=ngram_range)`.
         **classifier_kwargs: Parámetros adicionales para MultinomialNB (ej. alpha, fit_prior).
 
     Returns:
         Pipeline con pasos 'vectorizer' y 'classifier'.
     """
-    tfidf_step = vectorizer if vectorizer is not None else build_tfidf_vectorizer()
+    tfidf_step = (
+        vectorizer
+        if vectorizer is not None
+        else build_tfidf_vectorizer(ngram_range=ngram_range)
+    )
     classifier_step = MultinomialNB(**classifier_kwargs)
 
     return Pipeline(
@@ -965,4 +977,302 @@ def format_grid_search_comparison(
         "(Nota: No se selecciona modelo definitivo en esta subfase; X_test permanece reservado)."
     )
     lines.append("=" * 80)
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Comparación de representaciones TF-IDF: Unigramas vs Bigramas (Fase 3.5A)
+# ---------------------------------------------------------------------------
+
+NGRAM_CONFIGURATIONS: dict[str, tuple[int, int]] = {
+    "unigrams": (1, 1),
+    "unigrams_and_bigrams": (1, 2),
+}
+
+
+@dataclass(frozen=True)
+class NgramComparisonResult:
+    """Resultado estructurado de la comparación entre unigramas y unigramas+bigramas.
+
+    Attributes:
+        results: Mapeo {nombre_combinacion: ExperimentResult} con las 4 combinaciones evaluadas.
+        cv_folds: Cantidad de particiones estratificadas utilizadas.
+        primary_metric: Métrica principal de comparación (por defecto 'f1_macro').
+        ranking: Tupla ordenada de ExperimentResult de mayor a menor según la métrica principal.
+        ngram_configs: Mapeo de nombres a rangos (ej. {'unigrams': (1, 1), ...}).
+    """
+
+    results: Mapping[str, ExperimentResult]
+    cv_folds: int = 5
+    primary_metric: str = "f1_macro"
+    ranking: Sequence[ExperimentResult] = ()
+    ngram_configs: Mapping[str, tuple[int, int]] = field(
+        default_factory=lambda: dict(NGRAM_CONFIGURATIONS)
+    )
+
+    def to_dataframe(self) -> pd.DataFrame:
+        """Convierte los resultados a un pd.DataFrame estructurado para análisis."""
+        data = []
+        for rank, res in enumerate(self.ranking, start=1):
+            parts = res.name.split("__")
+            model_name = parts[0] if len(parts) > 1 else res.name
+            rep_name = parts[1] if len(parts) > 1 else "custom"
+            ngram_range = self.ngram_configs.get(rep_name, None)
+
+            f1_mean = res.metrics.get("f1_macro_mean", None)
+            f1_std = res.metrics.get("f1_macro_std", None)
+            acc_mean = res.metrics.get("accuracy_mean", None)
+            acc_std = res.metrics.get("accuracy_std", None)
+
+            data.append(
+                {
+                    "rank": rank,
+                    "combination": res.name,
+                    "model": model_name,
+                    "representation": rep_name,
+                    "ngram_range": str(ngram_range) if ngram_range else "-",
+                    "f1_macro_mean": f1_mean,
+                    "f1_macro_std": f1_std,
+                    "accuracy_mean": acc_mean,
+                    "accuracy_std": acc_std,
+                }
+            )
+        return pd.DataFrame(data)
+
+    def summary(self) -> str:
+        """Genera el reporte textual de comparación entre unigramas y bigramas."""
+        return format_ngram_comparison(self, self.primary_metric)
+
+
+def build_ngram_comparison_pipelines(
+    *,
+    config: MLConfig | None = None,
+    ngram_configs: Mapping[str, tuple[int, int]] | None = None,
+    vectorizer_factory: Any | None = None,
+    **classifier_kwargs: Any,
+) -> dict[str, Pipeline]:
+    """Construye las combinaciones de pipelines para comparar unigramas vs unigramas+bigramas.
+
+    Genera cuatro pipelines:
+    - 'logistic_regression__unigrams': Regresión Logística con TF-IDF (1, 1)
+    - 'logistic_regression__unigrams_and_bigrams': Regresión Logística con TF-IDF (1, 2)
+    - 'multinomial_nb__unigrams': Multinomial Naive Bayes con TF-IDF (1, 1)
+    - 'multinomial_nb__unigrams_and_bigrams': Multinomial Naive Bayes con TF-IDF (1, 2)
+
+    Permite inyectar un `vectorizer_factory` personalizado para futura compatibilidad
+    con transformadores del módulo NLP de José.
+
+    Args:
+        config: Configuración MLConfig opcional.
+        ngram_configs: Mapeo opcional de nombres a rangos (por defecto NGRAM_CONFIGURATIONS).
+        vectorizer_factory: Fábrica opcional `func(ngram_range=...) -> Transformer`.
+        **classifier_kwargs: Hiperparámetros adicionales por clasificador.
+
+    Returns:
+        Diccionario con las cuatro instancias de Pipeline listas para evaluar.
+    """
+    from .config import load_config
+
+    active_config = config or load_config()
+
+    resolved_ngrams = (
+        dict(ngram_configs) if ngram_configs is not None else NGRAM_CONFIGURATIONS
+    )
+
+    pipelines: dict[str, Pipeline] = {}
+    for ngram_name, ngram_range in resolved_ngrams.items():
+        if vectorizer_factory is not None:
+            lr_vec = vectorizer_factory(ngram_range=ngram_range)
+            nb_vec = vectorizer_factory(ngram_range=ngram_range)
+        else:
+            lr_vec = build_tfidf_vectorizer(ngram_range=ngram_range)
+            nb_vec = build_tfidf_vectorizer(ngram_range=ngram_range)
+
+        lr_name = f"logistic_regression__{ngram_name}"
+        nb_name = f"multinomial_nb__{ngram_name}"
+
+        pipelines[lr_name] = build_logistic_regression_pipeline(
+            config=active_config,
+            vectorizer=lr_vec,
+            **classifier_kwargs.get("logistic_regression", {}),
+        )
+        pipelines[nb_name] = build_multinomial_nb_pipeline(
+            vectorizer=nb_vec,
+            **classifier_kwargs.get("multinomial_nb", {}),
+        )
+
+    return pipelines
+
+
+def compare_ngram_representations(
+    X_train: Sequence[str] | pd.Series | DatasetSplit,
+    y_train: Sequence[str] | pd.Series | None = None,
+    *,
+    config: MLConfig | None = None,
+    cv: StratifiedKFold | int | None = None,
+    primary_metric: str = "f1_macro",
+    ngram_configs: Mapping[str, tuple[int, int]] | None = None,
+    vectorizer_factory: Any | None = None,
+) -> NgramComparisonResult:
+    """Ejecuta la comparación reproducible de TF-IDF (1, 1) vs TF-IDF (1, 2) con CV estratificada.
+
+    Evalúa cuatro combinaciones sobre exactamente los mismos pliegues estratificados
+    para garantizar una comparación justa y determinista.
+
+    Utiliza EXCLUSIVAMENTE X_train e y_train. X_test e y_test permanecen reservados.
+
+    Args:
+        X_train: Datos de entrenamiento (pd.Series, secuencia) o un `DatasetSplit`.
+        y_train: Etiquetas de entrenamiento. Requerido si X_train no es `DatasetSplit`.
+        config: Configuración MLConfig opcional.
+        cv: Objeto StratifiedKFold o entero con número de pliegues.
+        primary_metric: Métrica principal de comparación (por defecto 'f1_macro').
+        ngram_configs: Mapeo opcional de nombres de representación a rangos de n-gramas.
+        vectorizer_factory: Fábrica opcional para construir el vectorizador con n-gramas.
+
+    Returns:
+        NgramComparisonResult con los resultados estructurados de las 4 combinaciones.
+    """
+    from .config import load_config
+
+    active_config = config or load_config()
+
+    if isinstance(X_train, DatasetSplit):
+        if y_train is not None:
+            raise ValueError(
+                "No se debe proporcionar 'y_train' cuando 'X_train' es un objeto DatasetSplit."
+            )
+        # IMPORTANTE: Utiliza exclusivamente X_train e y_train. X_test e y_test permanecen reservados.
+        actual_X = X_train.X_train
+        actual_y = X_train.y_train
+    else:
+        if y_train is None:
+            raise ValueError("Se requiere 'y_train' cuando 'X_train' no es DatasetSplit.")
+        actual_X = X_train
+        actual_y = y_train
+
+    # Resolver objeto StratifiedKFold idéntico para todas las combinaciones
+    if isinstance(cv, StratifiedKFold):
+        cv_obj = cv
+    elif isinstance(cv, int):
+        cv_obj = build_stratified_kfold(active_config, n_splits=cv)
+    else:
+        cv_obj = build_stratified_kfold(active_config)
+
+    resolved_ngrams = (
+        dict(ngram_configs) if ngram_configs is not None else NGRAM_CONFIGURATIONS
+    )
+
+    pipelines = build_ngram_comparison_pipelines(
+        config=active_config,
+        ngram_configs=resolved_ngrams,
+        vectorizer_factory=vectorizer_factory,
+    )
+
+    results: dict[str, ExperimentResult] = {}
+    for name, pipe in pipelines.items():
+        res = cross_validate_pipeline(
+            pipeline=pipe,
+            X_train=actual_X,
+            y_train=actual_y,
+            cv=cv_obj,
+            config=active_config,
+            name=name,
+        )
+        results[name] = res
+
+    rank_key = f"{primary_metric}_mean"
+    ranked = sorted(
+        results.values(),
+        key=lambda r: r.metrics.get(rank_key, 0.0),
+        reverse=True,
+    )
+
+    return NgramComparisonResult(
+        results=results,
+        cv_folds=cv_obj.get_n_splits(),
+        primary_metric=primary_metric,
+        ranking=tuple(ranked),
+        ngram_configs=resolved_ngrams,
+    )
+
+
+def format_ngram_comparison(
+    comparison: NgramComparisonResult | Sequence[ExperimentResult] | Mapping[str, ExperimentResult],
+    primary_metric: str = "f1_macro",
+) -> str:
+    """Genera una tabla comparativa legible para las representaciones de n-gramas.
+
+    Presenta de forma neutral las cuatro combinaciones evaluadas, sin declarar
+    un ganador definitivo y preservando el aislamiento del conjunto de prueba.
+    """
+    if isinstance(comparison, NgramComparisonResult):
+        ranking_list = list(comparison.ranking)
+        cv_folds = comparison.cv_folds
+        ngram_map = comparison.ngram_configs
+    elif isinstance(comparison, Mapping):
+        ranking_list = sorted(
+            comparison.values(),
+            key=lambda r: r.metrics.get(f"{primary_metric}_mean", 0.0),
+            reverse=True,
+        )
+        cv_folds = 5
+        ngram_map = NGRAM_CONFIGURATIONS
+    else:
+        ranking_list = sorted(
+            comparison,
+            key=lambda r: r.metrics.get(f"{primary_metric}_mean", 0.0),
+            reverse=True,
+        )
+        cv_folds = 5
+        ngram_map = NGRAM_CONFIGURATIONS
+
+    lines = [
+        "=" * 85,
+        "COMPARACIÓN DE REPRESENTACIONES: UNIGRAMAS (1,1) VS UNIGRAMAS + BIGRAMAS (1,2)",
+        "=" * 85,
+        f"Validación cruzada estratificada: {cv_folds} pliegues (shuffle=True, random_state=42)",
+        "Datos evaluados: Exclusivamente conjunto de entrenamiento (X_train, y_train)",
+        "",
+        f"Ranking preliminar por {primary_metric} (promedio ± desviación estándar):",
+        "-" * 85,
+    ]
+
+    for rank, res in enumerate(ranking_list, start=1):
+        parts = res.name.split("__")
+        model_part = parts[0] if len(parts) > 1 else res.name
+        rep_part = parts[1] if len(parts) > 1 else "desconocido"
+        ngram_tuple = ngram_map.get(rep_part, "-")
+
+        model_display = (
+            "Regresión Logística"
+            if "logistic" in model_part
+            else ("Multinomial Naive Bayes" if "nb" in model_part else model_part)
+        )
+        rep_display = (
+            "Unigramas (1, 1)"
+            if rep_part == "unigrams"
+            else ("Unigramas + Bigramas (1, 2)" if "bigram" in rep_part else str(ngram_tuple))
+        )
+
+        f1_m = res.metrics.get("f1_macro_mean", 0.0)
+        f1_s = res.metrics.get("f1_macro_std", 0.0)
+        acc_m = res.metrics.get("accuracy_mean", 0.0)
+        acc_s = res.metrics.get("accuracy_std", 0.0)
+
+        lines.append(f"[{rank}] Combinación: {res.name}")
+        lines.append(f"    Algoritmo:      {model_display}")
+        lines.append(f"    Representación: {rep_display}")
+        lines.append(f"    F1 Macro:       {f1_m:.4f} ± {f1_s:.4f}")
+        lines.append(f"    Accuracy:       {acc_m:.4f} ± {acc_s:.4f}")
+
+        if "f1_macro" in res.fold_metrics:
+            folds_f1 = ", ".join(f"{v:.4f}" for v in res.fold_metrics["f1_macro"])
+            lines.append(f"    Folds F1 Macro: [{folds_f1}]")
+        lines.append("-" * 85)
+
+    lines.append(
+        "(Nota metodológica: No se selecciona modelo definitivo ni se evalúa X_test en la Fase 3.5A)."
+    )
+    lines.append("=" * 85)
     return "\n".join(lines)

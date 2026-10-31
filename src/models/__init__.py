@@ -3,7 +3,8 @@
 El paquete contiene contratos, configuración, validación de dataset, partición
 estratificada, pipelines candidatos de clasificación (Regresión Logística
 y Multinomial Naive Bayes) con TF-IDF, evaluación, diagnóstico, validación
-cruzada estratificada y optimización de hiperparámetros con GridSearchCV.
+cruzada estratificada, optimización de hiperparámetros y comparación de
+representaciones n-gramas.
 """
 
 from .config import DEFAULT_CONFIG_PATH, MLConfig, load_config
@@ -37,18 +38,23 @@ from .evaluate import (
 )
 from .experiments import (
     DEFAULT_PARAM_GRIDS,
+    NGRAM_CONFIGURATIONS,
     ExperimentResult,
     ExperimentSpec,
     GridSearchResult,
+    NgramComparisonResult,
     build_logistic_regression_pipeline,
     build_multinomial_nb_pipeline,
+    build_ngram_comparison_pipelines,
     build_stratified_kfold,
     build_tfidf_vectorizer,
+    compare_ngram_representations,
     cross_validate_pipeline,
     cv_results_to_dataframe,
     evaluate_candidates_cv,
     format_cv_comparison,
     format_grid_search_comparison,
+    format_ngram_comparison,
     get_candidate_pipelines,
     get_default_param_grid,
     predict,
@@ -106,6 +112,11 @@ __all__ = [
     "tune_pipeline_grid_search",
     "run_grid_search",
     "format_grid_search_comparison",
+    "NGRAM_CONFIGURATIONS",
+    "NgramComparisonResult",
+    "build_ngram_comparison_pipelines",
+    "compare_ngram_representations",
+    "format_ngram_comparison",
     "EvaluationReport",
     "Misclassification",
     "compute_accuracy",
