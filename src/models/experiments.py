@@ -1759,3 +1759,577 @@ def format_preprocessing_comparison(
     )
     lines.append("=" * 85)
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Selección reproducible del mejor modelo por validación cruzada (Fase 3.6B)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CandidateEvaluation:
+    """Representación normalizada interna de un candidato evaluado con validación cruzada.
+
+    Attributes:
+        name: Identificador único del candidato (ej. 'logistic_regression__unigrams').
+        f1_macro_mean: Promedio de F1 Macro a través de los folds.
+        f1_macro_std: Desviación estándar de F1 Macro a través de los folds.
+        accuracy_mean: Promedio de Accuracy a través de los folds.
+        cv_folds: Número de pliegues empleados en la evaluación.
+        accuracy_std: Desviación estándar de Accuracy a través de los folds.
+        configuration: Diccionario con la configuración del modelo o hiperparámetros.
+        fold_metrics: Desglose de métricas por pliegue.
+        estimator: Instancia del estimador o Pipeline (si está disponible).
+    """
+
+    name: str
+    f1_macro_mean: float
+    f1_macro_std: float
+    accuracy_mean: float
+    cv_folds: int
+    accuracy_std: float = 0.0
+    configuration: Mapping[str, Any] = field(default_factory=dict)
+    fold_metrics: Mapping[str, Sequence[float]] = field(default_factory=dict)
+    estimator: Any | None = None
+
+
+@dataclass(frozen=True)
+class ModelSelectionResult:
+    """Resultado estructurado de la selección del mejor modelo candidato por validación cruzada.
+
+    Attributes:
+        selected_model_name: Nombre de la combinación o modelo ganador.
+        cv_metrics: Métricas del modelo ganador (f1_macro_mean, f1_macro_std, accuracy_mean, etc.).
+        configuration: Diccionario con la configuración del modelo ganador.
+        justification: Explicación detallada del motivo de selección y desempate.
+        ranking: Lista ordenada de diccionarios con todos los candidatos comparados.
+        pipeline: Estimador / Pipeline del modelo seleccionado (si está disponible).
+        cv_folds: Número de pliegues estratificados utilizados en la comparación.
+        decision_criteria: Lista de criterios de decisión aplicados en orden jerárquico.
+    """
+
+    selected_model_name: str
+    cv_metrics: Mapping[str, float]
+    configuration: Mapping[str, Any]
+    justification: str
+    ranking: Sequence[Mapping[str, Any]]
+    pipeline: Pipeline | None = None
+    cv_folds: int = 5
+    decision_criteria: Sequence[str] = (
+        "1. Mayor F1 Macro promedio (f1_macro_mean)",
+        "2. Menor desviación estándar de F1 Macro (f1_macro_std)",
+        "3. Mayor Accuracy promedio (accuracy_mean)",
+        "4. Identificador estable determinista (orden alfabético)",
+    )
+
+    def to_dataframe(self) -> pd.DataFrame:
+        """Convierte el ranking de candidatos evaluados a un pd.DataFrame estructurado."""
+        return pd.DataFrame(self.ranking)
+
+    def summary(self) -> str:
+        """Genera el reporte textual de la selección del mejor modelo."""
+        return format_model_selection(self)
+
+
+def validate_candidates_compatibility(
+    candidates: Sequence[CandidateEvaluation],
+    *,
+    expected_cv_folds: int | None = None,
+) -> None:
+    """Verifica que todos los candidatos provengan del mismo protocolo de evaluación.
+
+    Comprueba:
+    - Que la colección de candidatos no esté vacía.
+    - Que todos tengan el mismo número de folds de validación cruzada.
+    - Que las métricas sean valores numéricos finitos y válidos en [0.0, 1.0].
+    - Que la desviación estándar sea no negativa.
+    - Que los pliegues detallados (si existen) tengan longitudes idénticas.
+
+    Raises:
+        ValueError: Si existe inconsistencia en folds, métricas inválidas o lista vacía.
+    """
+    if len(candidates) == 0:
+        raise ValueError("No se proporcionaron candidatos para la selección del mejor modelo.")
+
+    reference_folds = (
+        expected_cv_folds if expected_cv_folds is not None else candidates[0].cv_folds
+    )
+
+    for c in candidates:
+        if c.cv_folds != reference_folds:
+            raise ValueError(
+                f"Incompatibilidad en el protocolo de validación cruzada: el candidato '{c.name}' "
+                f"fue evaluado con {c.cv_folds} folds, pero se esperaban {reference_folds} folds. "
+                "Para una comparación justa todos los candidatos deben usar el mismo esquema de partición."
+            )
+
+        for metric_name, val in [
+            ("f1_macro_mean", c.f1_macro_mean),
+            ("f1_macro_std", c.f1_macro_std),
+            ("accuracy_mean", c.accuracy_mean),
+            ("accuracy_std", c.accuracy_std),
+        ]:
+            if val is None or not np.isfinite(val):
+                raise ValueError(
+                    f"El candidato '{c.name}' contiene un valor no numérico o no finito en '{metric_name}': {val}."
+                )
+
+        if not (0.0 <= c.f1_macro_mean <= 1.0):
+            raise ValueError(
+                f"El candidato '{c.name}' tiene 'f1_macro_mean' fuera del rango [0.0, 1.0]: {c.f1_macro_mean}."
+            )
+        if not (0.0 <= c.accuracy_mean <= 1.0):
+            raise ValueError(
+                f"El candidato '{c.name}' tiene 'accuracy_mean' fuera del rango [0.0, 1.0]: {c.accuracy_mean}."
+            )
+        if c.f1_macro_std < 0.0:
+            raise ValueError(
+                f"El candidato '{c.name}' tiene una desviación estándar negativa: {c.f1_macro_std}."
+            )
+
+        if "f1_macro" in c.fold_metrics and len(c.fold_metrics["f1_macro"]) != reference_folds:
+            raise ValueError(
+                f"El candidato '{c.name}' reporta {len(c.fold_metrics['f1_macro'])} pliegues en 'fold_metrics', "
+                f"pero se esperaban {reference_folds} folds."
+            )
+
+
+def _candidate_sort_key(c: CandidateEvaluation) -> tuple[float, float, float, str]:
+    """Genera la clave de ordenamiento jerárquica para la selección del modelo.
+
+    Criterios en orden de prioridad:
+    1. Mayor F1 Macro promedio (-f1_macro_mean para orden ascendente)
+    2. Menor desviación estándar (+f1_macro_std para orden ascendente)
+    3. Mayor Accuracy promedio (-accuracy_mean para orden ascendente)
+    4. Identificador estable determinista (orden alfabético del nombre)
+    """
+    return (
+        -float(c.f1_macro_mean),
+        float(c.f1_macro_std),
+        -float(c.accuracy_mean),
+        str(c.name),
+    )
+
+
+def _build_justification(
+    winner: CandidateEvaluation,
+    runner_up: CandidateEvaluation | None,
+    total_candidates: int,
+) -> str:
+    """Genera la justificación metodológica de la selección del modelo ganador."""
+    if runner_up is None or total_candidates <= 1:
+        return (
+            f"El modelo '{winner.name}' fue seleccionado como único candidato evaluado "
+            f"con F1 Macro promedio de {winner.f1_macro_mean:.4f} (± {winner.f1_macro_std:.4f}) "
+            f"y Accuracy de {winner.accuracy_mean:.4f}."
+        )
+
+    f1_diff = winner.f1_macro_mean - runner_up.f1_macro_mean
+    std_diff = runner_up.f1_macro_std - winner.f1_macro_std
+    acc_diff = winner.accuracy_mean - runner_up.accuracy_mean
+
+    if abs(f1_diff) > 1e-9:
+        return (
+            f"El modelo '{winner.name}' fue seleccionado por obtener el mayor F1 Macro promedio "
+            f"({winner.f1_macro_mean:.4f} ± {winner.f1_macro_std:.4f}) frente a {runner_up.f1_macro_mean:.4f} "
+            f"(± {runner_up.f1_macro_std:.4f}) de '{runner_up.name}', superándolo por {f1_diff:+.4f} puntos."
+        )
+
+    if abs(std_diff) > 1e-9:
+        return (
+            f"El modelo '{winner.name}' empató en F1 Macro promedio ({winner.f1_macro_mean:.4f}) con "
+            f"'{runner_up.name}', pero fue seleccionado por el primer criterio de desempate al presentar "
+            f"una menor desviación estándar ({winner.f1_macro_std:.4f} frente a {runner_up.f1_macro_std:.4f}), "
+            f"demostrando mayor estabilidad y menor variabilidad entre las {winner.cv_folds} particiones."
+        )
+
+    if abs(acc_diff) > 1e-9:
+        return (
+            f"El modelo '{winner.name}' empató en F1 Macro ({winner.f1_macro_mean:.4f}) y desviación estándar "
+            f"({winner.f1_macro_std:.4f}) con '{runner_up.name}', pero fue seleccionado por el segundo criterio "
+            f"de desempate al obtener un mayor Accuracy promedio ({winner.accuracy_mean:.4f} frente a "
+            f"{runner_up.accuracy_mean:.4f})."
+        )
+
+    return (
+        f"El modelo '{winner.name}' empató en todas las métricas cuantitativas de validación cruzada "
+        f"(F1 Macro: {winner.f1_macro_mean:.4f} ± {winner.f1_macro_std:.4f}, Accuracy: {winner.accuracy_mean:.4f}) "
+        f"con '{runner_up.name}'. Fue seleccionado mediante el desempate final determinista basado en el "
+        f"orden alfabético del identificador estable."
+    )
+
+
+def _normalize_candidate_evaluations(
+    candidates: Any,
+    default_cv_folds: int = 5,
+) -> list[CandidateEvaluation]:
+    """Convierte cualquier estructura de resultados previa a una lista de CandidateEvaluation."""
+    if candidates is None:
+        raise ValueError("Los resultados de candidatos no pueden ser None.")
+
+    # Caso 1: NgramComparisonResult
+    if isinstance(candidates, NgramComparisonResult):
+        normalized: list[CandidateEvaluation] = []
+        for name, res in candidates.results.items():
+            f1_m = float(res.metrics.get("f1_macro_mean", 0.0))
+            f1_s = float(res.metrics.get("f1_macro_std", 0.0))
+            acc_m = float(res.metrics.get("accuracy_mean", 0.0))
+            acc_s = float(res.metrics.get("accuracy_std", 0.0))
+            parts = name.split("__")
+            rep = parts[1] if len(parts) > 1 else "unigrams"
+            ngram_range = candidates.ngram_configs.get(rep, (1, 1))
+            normalized.append(
+                CandidateEvaluation(
+                    name=name,
+                    f1_macro_mean=f1_m,
+                    f1_macro_std=f1_s,
+                    accuracy_mean=acc_m,
+                    accuracy_std=acc_s,
+                    cv_folds=candidates.cv_folds,
+                    configuration={
+                        "algorithm": parts[0],
+                        "representation": rep,
+                        "ngram_range": ngram_range,
+                    },
+                    fold_metrics=dict(res.fold_metrics),
+                )
+            )
+        return normalized
+
+    # Caso 2: PreprocessingComparisonResult
+    if isinstance(candidates, PreprocessingComparisonResult):
+        normalized = []
+        for name, res in candidates.results.items():
+            f1_m = float(res.metrics.get("f1_macro_mean", 0.0))
+            f1_s = float(res.metrics.get("f1_macro_std", 0.0))
+            acc_m = float(res.metrics.get("accuracy_mean", 0.0))
+            acc_s = float(res.metrics.get("accuracy_std", 0.0))
+            parts = name.split("__")
+            tech = parts[1] if len(parts) > 1 else "none"
+            normalized.append(
+                CandidateEvaluation(
+                    name=name,
+                    f1_macro_mean=f1_m,
+                    f1_macro_std=f1_s,
+                    accuracy_mean=acc_m,
+                    accuracy_std=acc_s,
+                    cv_folds=candidates.cv_folds,
+                    configuration={
+                        "algorithm": parts[0],
+                        "technique": tech,
+                        "ngram_range": candidates.ngram_range,
+                    },
+                    fold_metrics=dict(res.fold_metrics),
+                )
+            )
+        return normalized
+
+    # Caso 3: Mapping (dict de GridSearchResult, ExperimentResult o dicts)
+    if isinstance(candidates, Mapping):
+        normalized = []
+        for name, item in candidates.items():
+            if isinstance(item, GridSearchResult):
+                mean_key = f"mean_test_{item.primary_metric}"
+                std_key = f"std_test_{item.primary_metric}"
+                best_idx = 0
+                if mean_key in item.cv_results and len(item.cv_results[mean_key]) > 0:
+                    best_idx = int(np.argmax(item.cv_results[mean_key]))
+                f1_s = (
+                    float(item.cv_results[std_key][best_idx])
+                    if std_key in item.cv_results
+                    else 0.0
+                )
+                acc_m = (
+                    float(item.cv_results["mean_test_accuracy"][best_idx])
+                    if "mean_test_accuracy" in item.cv_results
+                    else float(item.best_score)
+                )
+                normalized.append(
+                    CandidateEvaluation(
+                        name=name,
+                        f1_macro_mean=float(item.best_score),
+                        f1_macro_std=f1_s,
+                        accuracy_mean=acc_m,
+                        cv_folds=default_cv_folds,
+                        configuration=dict(item.best_params),
+                        estimator=item.best_estimator,
+                    )
+                )
+            elif isinstance(item, CandidateEvaluation):
+                normalized.append(item)
+            elif isinstance(item, ExperimentResult):
+                f1_m = float(item.metrics.get("f1_macro_mean", item.metrics.get("f1_macro", 0.0)))
+                f1_s = float(item.metrics.get("f1_macro_std", 0.0))
+                acc_m = float(item.metrics.get("accuracy_mean", item.metrics.get("accuracy", 0.0)))
+                acc_s = float(item.metrics.get("accuracy_std", 0.0))
+                folds_count = (
+                    len(item.fold_metrics["f1_macro"])
+                    if "f1_macro" in item.fold_metrics
+                    else default_cv_folds
+                )
+                normalized.append(
+                    CandidateEvaluation(
+                        name=name,
+                        f1_macro_mean=f1_m,
+                        f1_macro_std=f1_s,
+                        accuracy_mean=acc_m,
+                        accuracy_std=acc_s,
+                        cv_folds=folds_count,
+                        fold_metrics=dict(item.fold_metrics),
+                    )
+                )
+            elif isinstance(item, Mapping):
+                f1_m = float(item.get("f1_macro_mean", item.get("f1_macro", 0.0)))
+                f1_s = float(item.get("f1_macro_std", item.get("std", 0.0)))
+                acc_m = float(item.get("accuracy_mean", item.get("accuracy", 0.0)))
+                acc_s = float(item.get("accuracy_std", 0.0))
+                folds_count = int(item.get("cv_folds", default_cv_folds))
+                config = item.get("configuration", item.get("params", {}))
+                est = item.get("pipeline", item.get("estimator", None))
+                normalized.append(
+                    CandidateEvaluation(
+                        name=name,
+                        f1_macro_mean=f1_m,
+                        f1_macro_std=f1_s,
+                        accuracy_mean=acc_m,
+                        accuracy_std=acc_s,
+                        cv_folds=folds_count,
+                        configuration=dict(config) if isinstance(config, Mapping) else {},
+                        estimator=est,
+                    )
+                )
+            else:
+                raise TypeError(
+                    f"Tipo de resultado no reconocido para el candidato '{name}': {type(item).__name__}."
+                )
+        return normalized
+
+    # Caso 4: Sequence (list o tuple de ExperimentResult, GridSearchResult o dicts)
+    if isinstance(candidates, Sequence):
+        normalized = []
+        for i, item in enumerate(candidates):
+            if isinstance(item, CandidateEvaluation):
+                normalized.append(item)
+            elif isinstance(item, ExperimentResult):
+                f1_m = float(item.metrics.get("f1_macro_mean", item.metrics.get("f1_macro", 0.0)))
+                f1_s = float(item.metrics.get("f1_macro_std", 0.0))
+                acc_m = float(item.metrics.get("accuracy_mean", item.metrics.get("accuracy", 0.0)))
+                acc_s = float(item.metrics.get("accuracy_std", 0.0))
+                folds_count = (
+                    len(item.fold_metrics["f1_macro"])
+                    if "f1_macro" in item.fold_metrics
+                    else default_cv_folds
+                )
+                normalized.append(
+                    CandidateEvaluation(
+                        name=item.name,
+                        f1_macro_mean=f1_m,
+                        f1_macro_std=f1_s,
+                        accuracy_mean=acc_m,
+                        accuracy_std=acc_s,
+                        cv_folds=folds_count,
+                        fold_metrics=dict(item.fold_metrics),
+                    )
+                )
+            elif isinstance(item, GridSearchResult):
+                mean_key = f"mean_test_{item.primary_metric}"
+                std_key = f"std_test_{item.primary_metric}"
+                best_idx = 0
+                if mean_key in item.cv_results and len(item.cv_results[mean_key]) > 0:
+                    best_idx = int(np.argmax(item.cv_results[mean_key]))
+                f1_s = (
+                    float(item.cv_results[std_key][best_idx])
+                    if std_key in item.cv_results
+                    else 0.0
+                )
+                acc_m = (
+                    float(item.cv_results["mean_test_accuracy"][best_idx])
+                    if "mean_test_accuracy" in item.cv_results
+                    else float(item.best_score)
+                )
+                normalized.append(
+                    CandidateEvaluation(
+                        name=item.model_name,
+                        f1_macro_mean=float(item.best_score),
+                        f1_macro_std=f1_s,
+                        accuracy_mean=acc_m,
+                        cv_folds=default_cv_folds,
+                        configuration=dict(item.best_params),
+                        estimator=item.best_estimator,
+                    )
+                )
+            elif isinstance(item, Mapping):
+                c_name = str(item.get("name", f"candidate_{i+1}"))
+                f1_m = float(item.get("f1_macro_mean", item.get("f1_macro", 0.0)))
+                f1_s = float(item.get("f1_macro_std", item.get("std", 0.0)))
+                acc_m = float(item.get("accuracy_mean", item.get("accuracy", 0.0)))
+                acc_s = float(item.get("accuracy_std", 0.0))
+                folds_count = int(item.get("cv_folds", default_cv_folds))
+                config = item.get("configuration", item.get("params", {}))
+                est = item.get("pipeline", item.get("estimator", None))
+                normalized.append(
+                    CandidateEvaluation(
+                        name=c_name,
+                        f1_macro_mean=f1_m,
+                        f1_macro_std=f1_s,
+                        accuracy_mean=acc_m,
+                        accuracy_std=acc_s,
+                        cv_folds=folds_count,
+                        configuration=dict(config) if isinstance(config, Mapping) else {},
+                        estimator=est,
+                    )
+                )
+            else:
+                raise TypeError(
+                    f"Elemento no reconocido en la secuencia de candidatos (índice {i}): {type(item).__name__}."
+                )
+        return normalized
+
+    raise TypeError(
+        f"Se esperaba una colección de candidatos (Sequence, Mapping, NgramComparisonResult o "
+        f"PreprocessingComparisonResult), pero se recibió: {type(candidates).__name__}."
+    )
+
+
+def select_best_model(
+    candidates: (
+        Sequence[ExperimentResult]
+        | Mapping[str, ExperimentResult]
+        | NgramComparisonResult
+        | PreprocessingComparisonResult
+        | Mapping[str, GridSearchResult]
+        | Sequence[GridSearchResult]
+        | Sequence[Mapping[str, Any]]
+    ),
+    *,
+    expected_cv_folds: int | None = None,
+) -> ModelSelectionResult:
+    """Selecciona de forma reproducible la mejor configuración según métricas de validación cruzada.
+
+    Aplica de manera determinista los criterios contractuales jerárquicos:
+    1. Criterio principal: Mayor F1 Macro promedio (f1_macro_mean).
+    2. Primer desempate: Menor desviación estándar de F1 Macro (f1_macro_std).
+    3. Segundo desempate: Mayor Accuracy promedio (accuracy_mean).
+    4. Desempate final: Identificador estable determinista (orden alfabético).
+
+    Verifica que todos los candidatos comparados correspondan al mismo número de pliegues
+    y protocolo de validación cruzada, rechazando evaluaciones incompatibles.
+
+    Utiliza EXCLUSIVAMENTE los resultados de entrenamiento en CV. Nunca accede a X_test ni y_test.
+
+    Args:
+        candidates: Resultados de validación cruzada procedentes de run_cross_validation,
+            compare_ngram_representations, compare_preprocessing_techniques o run_grid_search.
+        expected_cv_folds: Número contractual esperado de folds (opcional; si se omite,
+            se deduce del primer candidato).
+
+    Returns:
+        Instancia estructurada de ModelSelectionResult con el ganador, métricas,
+        configuración, justificación analítica y ranking completo.
+
+    Raises:
+        ValueError: Si los candidatos están vacíos, incompatibles en folds o tienen métricas no finitas.
+        TypeError: Si la estructura de entrada es de un tipo no admitido.
+    """
+    normalized = _normalize_candidate_evaluations(
+        candidates,
+        default_cv_folds=expected_cv_folds if expected_cv_folds is not None else 5,
+    )
+
+    validate_candidates_compatibility(normalized, expected_cv_folds=expected_cv_folds)
+
+    # Ordenamiento determinista con clave jerárquica
+    ranked = sorted(normalized, key=_candidate_sort_key)
+
+    winner = ranked[0]
+    runner_up = ranked[1] if len(ranked) > 1 else None
+
+    justification = _build_justification(winner, runner_up, len(ranked))
+
+    # Construir el ranking exportable
+    ranking_data: list[dict[str, Any]] = []
+    for rank_idx, c in enumerate(ranked, start=1):
+        ranking_data.append(
+            {
+                "rank": rank_idx,
+                "name": c.name,
+                "f1_macro_mean": c.f1_macro_mean,
+                "f1_macro_std": c.f1_macro_std,
+                "accuracy_mean": c.accuracy_mean,
+                "accuracy_std": c.accuracy_std,
+                "cv_folds": c.cv_folds,
+                "configuration": dict(c.configuration),
+            }
+        )
+
+    winner_metrics = {
+        "f1_macro_mean": winner.f1_macro_mean,
+        "f1_macro_std": winner.f1_macro_std,
+        "accuracy_mean": winner.accuracy_mean,
+        "accuracy_std": winner.accuracy_std,
+    }
+
+    winner_pipeline: Pipeline | None = (
+        winner.estimator if isinstance(winner.estimator, Pipeline) else None
+    )
+
+    return ModelSelectionResult(
+        selected_model_name=winner.name,
+        cv_metrics=winner_metrics,
+        configuration=dict(winner.configuration),
+        justification=justification,
+        ranking=tuple(ranking_data),
+        pipeline=winner_pipeline,
+        cv_folds=winner.cv_folds,
+    )
+
+
+# Alias sinónimo
+select_best_candidate = select_best_model
+
+
+def format_model_selection(selection: ModelSelectionResult) -> str:
+    """Genera una presentación formateada y detallada de la selección del modelo ganador."""
+    lines = [
+        "=" * 85,
+        "SELECCIÓN REPRODUCIBLE DEL MEJOR MODELO POR VALIDACIÓN CRUZADA",
+        "=" * 85,
+        f"Pliegues de validación cruzada: {selection.cv_folds} (estratificados)",
+        f"Modelo ganador seleccionado:    {selection.selected_model_name}",
+        f"F1 Macro promedio:              {selection.cv_metrics.get('f1_macro_mean', 0.0):.4f} ± {selection.cv_metrics.get('f1_macro_std', 0.0):.4f}",
+        f"Accuracy promedio:              {selection.cv_metrics.get('accuracy_mean', 0.0):.4f} ± {selection.cv_metrics.get('accuracy_std', 0.0):.4f}",
+        "",
+        "Configuración del modelo seleccionado:",
+    ]
+    if selection.configuration:
+        for k, v in selection.configuration.items():
+            lines.append(f"  - {k}: {v}")
+    else:
+        lines.append("  (Configuración por defecto del pipeline)")
+
+    lines.append("")
+    lines.append("Justificación metodológica:")
+    lines.append(f"  {selection.justification}")
+    lines.append("")
+    lines.append("Criterios de desempate aplicados:")
+    for crit in selection.decision_criteria:
+        lines.append(f"  {crit}")
+    lines.append("")
+    lines.append("Ranking completo de candidatos evaluados:")
+    lines.append("-" * 85)
+
+    for row in selection.ranking:
+        rank = row.get("rank", "-")
+        name = row.get("name", "desconocido")
+        f1_m = row.get("f1_macro_mean", 0.0)
+        f1_s = row.get("f1_macro_std", 0.0)
+        acc_m = row.get("accuracy_mean", 0.0)
+        lines.append(f"[{rank}] {name:<40} | F1: {f1_m:.4f} ± {f1_s:.4f} | Acc: {acc_m:.4f}")
+
+    lines.append("-" * 85)
+    lines.append(
+        "(Nota metodológica: La selección se basa exclusivamente en CV sobre datos de entrenamiento; "
+        "el conjunto X_test permanece reservado para la evaluación final)."
+    )
+    lines.append("=" * 85)
+    return "\n".join(lines)
