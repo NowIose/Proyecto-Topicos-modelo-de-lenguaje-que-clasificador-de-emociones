@@ -1,0 +1,19 @@
+# Configuración compartida para experimentos futuros. No implica que el
+# dataset ni el artefacto existan todavía.
+dataset:
+  path: data/reviews.csv
+  text_column: texto
+  target_column: sentimiento
+  labels:
+    - positivo
+    - negativo
+
+experiment:
+  random_seed: 42
+  test_size: 0.20
+  cv_folds: 5
+  primary_metric: f1_macro
+
+artifacts:
+  directory: artifacts
+  pipeline_filename: sentiment_pipeline.joblib

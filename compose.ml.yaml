@@ -1,0 +1,17 @@
+services:
+  ml:
+    build:
+      context: .
+      dockerfile: docker/ml/Dockerfile
+    image: sentiment-classifier-ml:dev
+    working_dir: /app
+    environment:
+      PYTHONPATH: /app
+    volumes:
+      - ./config:/app/config:ro
+      - ./src:/app/src:ro
+      - ./tests:/app/tests:ro
+      - ./data:/app/data
+      - ./artifacts:/app/artifacts
+    command: ["python", "-m", "pytest", "-q"]
+    restart: "no"
