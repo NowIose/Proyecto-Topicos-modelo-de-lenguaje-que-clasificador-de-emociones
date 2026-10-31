@@ -7,6 +7,7 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
+from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import GridSearchCV, StratifiedKFold, cross_validate
@@ -43,6 +44,103 @@ def run_experiments(
     raise NotImplementedError("La experimentación se implementará en una fase posterior.")
 
 
+class TextPreprocessorAdapter(BaseEstimator, TransformerMixin):
+    """Adaptador compatible con scikit-learn para preprocesamiento de texto.
+
+    Permite integrar componentes de NLP externos (como stemming o lematización
+    provistos por `src.nlp`) dentro de un Pipeline de scikit-learn de manera
+    transparente, serializable y sin fuga de datos.
+
+    Acepta:
+    - Una función callable: `func(text: str) -> str` (o `func(texts) -> texts` si batch=True).
+    - Un transformador/estimador con método `transform` (y opcionalmente `fit`).
+    - None (actúa como passthrough/identidad).
+
+    Args:
+        func: Objeto callable o transformador subyacente.
+        name: Identificador opcional del transformador (ej. 'stemming', 'lemmatization').
+        batch: Si es True, pasa la colección completa de textos al callable de una sola vez.
+    """
+
+    def __init__(
+        self,
+        func: Any = None,
+        name: str | None = None,
+        batch: bool = False,
+    ) -> None:
+        self.func = func
+        self.name = name
+        self.batch = batch
+
+    def fit(self, X: Any, y: Any = None) -> TextPreprocessorAdapter:
+        """Ajusta el preprocesador si el componente subyacente soporta fit."""
+        if self.func is not None and hasattr(self.func, "fit"):
+            self.func.fit(X, y)
+        return self
+
+    def transform(self, X: Any) -> list[str]:
+        """Aplica la transformación de texto sobre la entrada.
+
+        Args:
+            X: Colección de textos (str, list, pd.Series o np.ndarray).
+
+        Returns:
+            Lista de cadenas de texto transformadas.
+        """
+        if isinstance(X, str):
+            texts = [X]
+        elif isinstance(X, pd.Series):
+            texts = X.tolist()
+        elif isinstance(X, np.ndarray):
+            texts = X.tolist()
+        elif isinstance(X, Sequence):
+            texts = list(X)
+        else:
+            texts = list(X)
+
+        if self.func is None:
+            return [str(t) for t in texts]
+
+        if hasattr(self.func, "transform"):
+            transformed = self.func.transform(texts)
+            if isinstance(transformed, (pd.Series, np.ndarray)):
+                return [str(t) for t in transformed.tolist()]
+            return [str(t) for t in transformed]
+
+        if callable(self.func):
+            if self.batch:
+                transformed = self.func(texts)
+                return [str(t) for t in transformed]
+            else:
+                return [str(self.func(text)) for text in texts]
+
+        raise TypeError(
+            f"El componente func debe ser un estimador con 'transform' o un callable, "
+            f"pero se recibió: {type(self.func).__name__}."
+        )
+
+
+def _resolve_preprocessor(preprocessor: Any | None) -> Any | None:
+    """Resuelve y normaliza un preprocesador a un transformador compatible con scikit-learn.
+
+    Args:
+        preprocessor: Estimador con fit/transform, callable o None.
+
+    Returns:
+        Transformador compatible con scikit-learn o None.
+    """
+    if preprocessor is None:
+        return None
+    if hasattr(preprocessor, "fit") and hasattr(preprocessor, "transform"):
+        return preprocessor
+    if callable(preprocessor):
+        return TextPreprocessorAdapter(func=preprocessor)
+    raise TypeError(
+        f"El preprocesador debe ser un estimador de scikit-learn (con fit y transform) "
+        f"o un callable, pero se recibió: {type(preprocessor).__name__}."
+    )
+
+
 def build_tfidf_vectorizer(
     *,
     ngram_range: tuple[int, int] = (1, 1),
@@ -76,6 +174,7 @@ def build_logistic_regression_pipeline(
     max_iter: int = 1000,
     ngram_range: tuple[int, int] = (1, 1),
     vectorizer: Any | None = None,
+    preprocessor: Any | None = None,
     config: MLConfig | None = None,
     **classifier_kwargs: Any,
 ) -> Pipeline:
@@ -84,6 +183,7 @@ def build_logistic_regression_pipeline(
     Cumple el contrato de la fase:
     - Estimador: LogisticRegression con random_state=42 y max_iter=1000.
     - Transformador: TfidfVectorizer configurable o reemplazable.
+    - Preprocesador: Opcional componente o adaptador NLP (ej. stemming o lematización).
 
     Args:
         random_state: Semilla para reproducibilidad. Si se pasa `config`, se
@@ -92,11 +192,12 @@ def build_logistic_regression_pipeline(
         ngram_range: Rango de n-gramas a utilizar si no se pasa `vectorizer` (por defecto unigramas: (1, 1)).
         vectorizer: Transformador opcional compatible con scikit-learn. Si es None,
             se usa `build_tfidf_vectorizer(ngram_range=ngram_range)`.
+        preprocessor: Transformador opcional o callable de NLP a ejecutar antes de vectorizar.
         config: Configuración `MLConfig` opcional para resolver parámetros por defecto.
         **classifier_kwargs: Parámetros adicionales para LogisticRegression.
 
     Returns:
-        Pipeline con pasos 'vectorizer' y 'classifier'.
+        Pipeline con pasos 'vectorizer' y 'classifier' (y opcionalmente 'preprocessor').
     """
     seed = (
         config.experiment.random_seed
@@ -115,18 +216,21 @@ def build_logistic_regression_pipeline(
         **classifier_kwargs,
     )
 
-    return Pipeline(
-        steps=[
-            ("vectorizer", tfidf_step),
-            ("classifier", classifier_step),
-        ]
-    )
+    steps: list[tuple[str, Any]] = []
+    prep_step = _resolve_preprocessor(preprocessor)
+    if prep_step is not None:
+        steps.append(("preprocessor", prep_step))
+    steps.append(("vectorizer", tfidf_step))
+    steps.append(("classifier", classifier_step))
+
+    return Pipeline(steps=steps)
 
 
 def build_multinomial_nb_pipeline(
     *,
     ngram_range: tuple[int, int] = (1, 1),
     vectorizer: Any | None = None,
+    preprocessor: Any | None = None,
     **classifier_kwargs: Any,
 ) -> Pipeline:
     """Construye un Pipeline de scikit-learn con TF-IDF y Multinomial Naive Bayes.
@@ -134,15 +238,17 @@ def build_multinomial_nb_pipeline(
     Cumple el contrato de la fase:
     - Estimador: MultinomialNB determinista.
     - Transformador: TfidfVectorizer configurable o reemplazable.
+    - Preprocesador: Opcional componente o adaptador NLP (ej. stemming o lematización).
 
     Args:
         ngram_range: Rango de n-gramas a utilizar si no se pasa `vectorizer` (por defecto unigramas: (1, 1)).
         vectorizer: Transformador opcional compatible con scikit-learn. Si es None,
             se usa `build_tfidf_vectorizer(ngram_range=ngram_range)`.
+        preprocessor: Transformador opcional o callable de NLP a ejecutar antes de vectorizar.
         **classifier_kwargs: Parámetros adicionales para MultinomialNB (ej. alpha, fit_prior).
 
     Returns:
-        Pipeline con pasos 'vectorizer' y 'classifier'.
+        Pipeline con pasos 'vectorizer' y 'classifier' (y opcionalmente 'preprocessor').
     """
     tfidf_step = (
         vectorizer
@@ -151,12 +257,14 @@ def build_multinomial_nb_pipeline(
     )
     classifier_step = MultinomialNB(**classifier_kwargs)
 
-    return Pipeline(
-        steps=[
-            ("vectorizer", tfidf_step),
-            ("classifier", classifier_step),
-        ]
-    )
+    steps: list[tuple[str, Any]] = []
+    prep_step = _resolve_preprocessor(preprocessor)
+    if prep_step is not None:
+        steps.append(("preprocessor", prep_step))
+    steps.append(("vectorizer", tfidf_step))
+    steps.append(("classifier", classifier_step))
+
+    return Pipeline(steps=steps)
 
 
 def get_candidate_pipelines(
@@ -164,6 +272,7 @@ def get_candidate_pipelines(
     random_seed: int = 42,
     max_iter: int = 1000,
     vectorizer: Any | None = None,
+    preprocessor: Any | None = None,
     config: MLConfig | None = None,
 ) -> dict[str, Pipeline]:
     """Retorna un mapeo con instancias nuevas de ambos modelos candidatos.
@@ -176,10 +285,12 @@ def get_candidate_pipelines(
             random_state=random_seed,
             max_iter=max_iter,
             vectorizer=vectorizer,
+            preprocessor=preprocessor,
             config=config,
         ),
         "multinomial_nb": build_multinomial_nb_pipeline(
             vectorizer=vectorizer,
+            preprocessor=preprocessor,
         ),
     }
 
@@ -1273,6 +1384,378 @@ def format_ngram_comparison(
 
     lines.append(
         "(Nota metodológica: No se selecciona modelo definitivo ni se evalúa X_test en la Fase 3.5A)."
+    )
+    lines.append("=" * 85)
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Comparación de técnicas de preprocesamiento NLP: Stemming vs Lematización (Fase 3.5B)
+# ---------------------------------------------------------------------------
+
+PREPROCESSING_TECHNIQUES: tuple[str, ...] = ("stemming", "lemmatization")
+
+
+def get_nlp_preprocessors() -> dict[str, Any] | None:
+    """Intenta descubrir e instanciar los preprocesadores de stemming y lematización de José en `src.nlp`.
+
+    Inspecciona si el módulo `src.nlp` expone implementaciones de stemming y lematización.
+    Si José aún no los ha implementado, devuelve None sin lanzar excepciones no deseadas.
+
+    Returns:
+        Diccionario {'stemming': ..., 'lemmatization': ...} si ambos están disponibles,
+        o None si aún no han sido implementados en `src.nlp`.
+    """
+    try:
+        import src.nlp as nlp  # type: ignore
+    except (ImportError, Exception):
+        return None
+
+    stemmer = (
+        getattr(nlp, "stemmer", None)
+        or getattr(nlp, "Stemmer", None)
+        or getattr(nlp, "stem_text", None)
+        or getattr(nlp, "SpanishStemmer", None)
+        or getattr(nlp, "get_stemmer", None)
+    )
+    lemmatizer = (
+        getattr(nlp, "lemmatizer", None)
+        or getattr(nlp, "Lemmatizer", None)
+        or getattr(nlp, "lemmatize_text", None)
+        or getattr(nlp, "SpanishLemmatizer", None)
+        or getattr(nlp, "get_lemmatizer", None)
+    )
+
+    if stemmer is None or lemmatizer is None:
+        return None
+
+    actual_stemmer = (
+        stemmer()
+        if callable(stemmer)
+        and not hasattr(stemmer, "transform")
+        and getattr(stemmer, "__name__", "").startswith("get_")
+        else stemmer
+    )
+    actual_lemmatizer = (
+        lemmatizer()
+        if callable(lemmatizer)
+        and not hasattr(lemmatizer, "transform")
+        and getattr(lemmatizer, "__name__", "").startswith("get_")
+        else lemmatizer
+    )
+
+    return {
+        "stemming": actual_stemmer,
+        "lemmatization": actual_lemmatizer,
+    }
+
+
+@dataclass(frozen=True)
+class PreprocessingComparisonResult:
+    """Estructura para almacenar y presentar la comparación de técnicas de preprocesamiento NLP.
+
+    Attributes:
+        results: Mapeo de nombre de combinación a ExperimentResult.
+        cv_folds: Número de particiones de validación cruzada.
+        primary_metric: Métrica principal de comparación (por defecto 'f1_macro').
+        ranking: Tupla ordenada de ExperimentResult de mayor a menor según la métrica principal.
+        techniques: Lista de nombres de técnicas evaluadas (ej. ['stemming', 'lemmatization']).
+        ngram_range: Rango de n-gramas configurado para TF-IDF.
+    """
+
+    results: Mapping[str, ExperimentResult]
+    cv_folds: int = 5
+    primary_metric: str = "f1_macro"
+    ranking: Sequence[ExperimentResult] = ()
+    techniques: Sequence[str] = ()
+    ngram_range: tuple[int, int] = (1, 1)
+
+    def to_dataframe(self) -> pd.DataFrame:
+        """Convierte los resultados a un pd.DataFrame estructurado para análisis."""
+        data = []
+        for rank, res in enumerate(self.ranking, start=1):
+            parts = res.name.split("__")
+            model_name = parts[0] if len(parts) > 1 else res.name
+            tech_name = parts[1] if len(parts) > 1 else "custom"
+
+            f1_mean = res.metrics.get("f1_macro_mean", None)
+            f1_std = res.metrics.get("f1_macro_std", None)
+            acc_mean = res.metrics.get("accuracy_mean", None)
+            acc_std = res.metrics.get("accuracy_std", None)
+
+            data.append(
+                {
+                    "rank": rank,
+                    "combination": res.name,
+                    "model": model_name,
+                    "technique": tech_name,
+                    "ngram_range": str(self.ngram_range),
+                    "f1_macro_mean": f1_mean,
+                    "f1_macro_std": f1_std,
+                    "accuracy_mean": acc_mean,
+                    "accuracy_std": acc_std,
+                }
+            )
+        return pd.DataFrame(data)
+
+    def summary(self) -> str:
+        """Genera el reporte textual de comparación entre técnicas de preprocesamiento."""
+        return format_preprocessing_comparison(self, self.primary_metric)
+
+
+def build_preprocessing_comparison_pipelines(
+    preprocessors: Mapping[str, Any],
+    *,
+    config: MLConfig | None = None,
+    ngram_range: tuple[int, int] = (1, 1),
+    vectorizer_factory: Any | None = None,
+    **classifier_kwargs: Any,
+) -> dict[str, Pipeline]:
+    """Construye las combinaciones de pipelines para comparar técnicas de preprocesamiento NLP.
+
+    Para cada técnica en `preprocessors` (ej. 'stemming', 'lemmatization'), genera
+    dos pipelines:
+    - 'logistic_regression__{technique}'
+    - 'multinomial_nb__{technique}'
+
+    Args:
+        preprocessors: Mapeo {nombre_tecnica: transformador_o_callable}.
+        config: Configuración MLConfig opcional.
+        ngram_range: Rango de n-gramas a utilizar para TF-IDF (por defecto (1, 1)).
+        vectorizer_factory: Fábrica opcional `func(ngram_range=...) -> Transformer`.
+        **classifier_kwargs: Hiperparámetros adicionales por estimador.
+
+    Returns:
+        Diccionario {nombre_combinacion: Pipeline}.
+    """
+    from .config import load_config
+
+    active_config = config or load_config()
+
+    if not isinstance(preprocessors, Mapping):
+        raise TypeError(
+            f"Se esperaba un Mapping para 'preprocessors', pero se recibió: {type(preprocessors).__name__}."
+        )
+    if len(preprocessors) == 0:
+        raise ValueError("El mapeo de 'preprocessors' no puede estar vacío.")
+
+    pipelines: dict[str, Pipeline] = {}
+    for tech_name, prep_obj in preprocessors.items():
+        if vectorizer_factory is not None:
+            lr_vec = vectorizer_factory(ngram_range=ngram_range)
+            nb_vec = vectorizer_factory(ngram_range=ngram_range)
+        else:
+            lr_vec = build_tfidf_vectorizer(ngram_range=ngram_range)
+            nb_vec = build_tfidf_vectorizer(ngram_range=ngram_range)
+
+        lr_name = f"logistic_regression__{tech_name}"
+        nb_name = f"multinomial_nb__{tech_name}"
+
+        pipelines[lr_name] = build_logistic_regression_pipeline(
+            config=active_config,
+            vectorizer=lr_vec,
+            preprocessor=prep_obj,
+            **classifier_kwargs.get("logistic_regression", {}),
+        )
+        pipelines[nb_name] = build_multinomial_nb_pipeline(
+            vectorizer=nb_vec,
+            preprocessor=prep_obj,
+            **classifier_kwargs.get("multinomial_nb", {}),
+        )
+
+    return pipelines
+
+
+def compare_preprocessing_techniques(
+    X_train: Sequence[str] | pd.Series | DatasetSplit,
+    y_train: Sequence[str] | pd.Series | None = None,
+    *,
+    preprocessors: Mapping[str, Any] | None = None,
+    config: MLConfig | None = None,
+    cv: StratifiedKFold | int | None = None,
+    ngram_range: tuple[int, int] = (1, 1),
+    vectorizer_factory: Any | None = None,
+    primary_metric: str = "f1_macro",
+) -> PreprocessingComparisonResult:
+    """Ejecuta la comparación reproducible entre técnicas de preprocesamiento NLP con CV estratificada.
+
+    Evalúa las combinaciones de (modelo x técnica de preprocesamiento) sobre
+    exactamente las mismas particiones estratificadas de entrenamiento.
+
+    El preprocesamiento se ejecuta dentro del Pipeline de scikit-learn, evitando
+    cualquier fuga de información hacia los pliegues de validación.
+
+    Utiliza EXCLUSIVAMENTE X_train e y_train. X_test e y_test permanecen estrictamente reservados.
+
+    Args:
+        X_train: Datos de entrenamiento (pd.Series, secuencia) o un `DatasetSplit`.
+        y_train: Etiquetas de entrenamiento. Requerido si X_train no es `DatasetSplit`.
+        preprocessors: Mapeo {nombre_tecnica: transformador_o_callable}. Si es None,
+            intenta obtener los preprocesadores de José en `src.nlp`. Si no están
+            implementados, lanza NotImplementedError explicativo.
+        config: Configuración MLConfig opcional.
+        cv: Objeto StratifiedKFold o entero con número de pliegues.
+        ngram_range: Rango de n-gramas para TF-IDF (por defecto (1, 1)).
+        vectorizer_factory: Fábrica opcional para el vectorizador TF-IDF.
+        primary_metric: Métrica principal de comparación (por defecto 'f1_macro').
+
+    Returns:
+        PreprocessingComparisonResult con los resultados estructurados de cada combinación.
+
+    Raises:
+        NotImplementedError: Si preprocessors es None y José aún no ha implementado el módulo `src.nlp`.
+        ValueError: Si los datos de entrenamiento están vacíos o las dimensiones no coinciden.
+    """
+    from .config import load_config
+
+    active_config = config or load_config()
+
+    if isinstance(X_train, DatasetSplit):
+        if y_train is not None:
+            raise ValueError(
+                "No se debe proporcionar 'y_train' cuando 'X_train' es un objeto DatasetSplit."
+            )
+        actual_X = X_train.X_train
+        actual_y = X_train.y_train
+    else:
+        if y_train is None:
+            raise ValueError("Se requiere 'y_train' cuando 'X_train' no es DatasetSplit.")
+        actual_X = X_train
+        actual_y = y_train
+
+    resolved_preprocessors = preprocessors
+    if resolved_preprocessors is None:
+        resolved_preprocessors = get_nlp_preprocessors()
+        if resolved_preprocessors is None:
+            raise NotImplementedError(
+                "Los componentes de preprocesamiento de NLP (stemming y lematización) "
+                "aún no han sido implementados por José en 'src.nlp'. Para evaluar la "
+                "comparación o realizar pruebas, inyecte un diccionario en el parámetro "
+                "'preprocessors' (ej. {'stemming': transformador_o_func, 'lemmatization': transformador_o_func})."
+            )
+
+    if not isinstance(resolved_preprocessors, Mapping) or len(resolved_preprocessors) == 0:
+        raise ValueError("El parámetro 'preprocessors' debe ser un Mapping no vacío.")
+
+    if isinstance(cv, StratifiedKFold):
+        cv_obj = cv
+    elif isinstance(cv, int):
+        cv_obj = build_stratified_kfold(active_config, n_splits=cv)
+    else:
+        cv_obj = build_stratified_kfold(active_config)
+
+    pipelines = build_preprocessing_comparison_pipelines(
+        preprocessors=resolved_preprocessors,
+        config=active_config,
+        ngram_range=ngram_range,
+        vectorizer_factory=vectorizer_factory,
+    )
+
+    results: dict[str, ExperimentResult] = {}
+    for name, pipe in pipelines.items():
+        res = cross_validate_pipeline(
+            pipeline=pipe,
+            X_train=actual_X,
+            y_train=actual_y,
+            cv=cv_obj,
+            config=active_config,
+            name=name,
+        )
+        results[name] = res
+
+    rank_key = f"{primary_metric}_mean"
+    ranked = sorted(
+        results.values(),
+        key=lambda r: r.metrics.get(rank_key, 0.0),
+        reverse=True,
+    )
+
+    return PreprocessingComparisonResult(
+        results=results,
+        cv_folds=cv_obj.get_n_splits(),
+        primary_metric=primary_metric,
+        ranking=tuple(ranked),
+        techniques=tuple(resolved_preprocessors.keys()),
+        ngram_range=ngram_range,
+    )
+
+
+def format_preprocessing_comparison(
+    comparison: PreprocessingComparisonResult | Sequence[ExperimentResult] | Mapping[str, ExperimentResult],
+    primary_metric: str = "f1_macro",
+) -> str:
+    """Genera una tabla comparativa legible para las técnicas de preprocesamiento NLP.
+
+    Presenta de forma neutral las combinaciones evaluadas, sin declarar
+    un ganador definitivo y preservando el aislamiento del conjunto de prueba.
+    """
+    if isinstance(comparison, PreprocessingComparisonResult):
+        ranking_list = list(comparison.ranking)
+        cv_folds = comparison.cv_folds
+        ngram_range = comparison.ngram_range
+    elif isinstance(comparison, Mapping):
+        ranking_list = sorted(
+            comparison.values(),
+            key=lambda r: r.metrics.get(f"{primary_metric}_mean", 0.0),
+            reverse=True,
+        )
+        cv_folds = 5
+        ngram_range = (1, 1)
+    else:
+        ranking_list = sorted(
+            comparison,
+            key=lambda r: r.metrics.get(f"{primary_metric}_mean", 0.0),
+            reverse=True,
+        )
+        cv_folds = 5
+        ngram_range = (1, 1)
+
+    lines = [
+        "=" * 85,
+        "COMPARACIÓN DE PREPROCESAMIENTO NLP: STEMMING VS LEMATIZACIÓN",
+        "=" * 85,
+        f"Validación cruzada estratificada: {cv_folds} pliegues (shuffle=True, random_state=42)",
+        f"Configuración TF-IDF: ngram_range={ngram_range}",
+        "Datos evaluados: Exclusivamente conjunto de entrenamiento (X_train, y_train)",
+        "",
+        f"Ranking preliminar por {primary_metric} (promedio ± desviación estándar):",
+        "-" * 85,
+    ]
+
+    for rank, res in enumerate(ranking_list, start=1):
+        parts = res.name.split("__")
+        model_part = parts[0] if len(parts) > 1 else res.name
+        tech_part = parts[1] if len(parts) > 1 else "desconocido"
+
+        model_display = (
+            "Regresión Logística"
+            if "logistic" in model_part
+            else ("Multinomial Naive Bayes" if "nb" in model_part else model_part)
+        )
+        tech_display = (
+            "Stemming"
+            if "stem" in tech_part.lower()
+            else ("Lematización" if "lem" in tech_part.lower() else tech_part)
+        )
+
+        f1_m = res.metrics.get("f1_macro_mean", 0.0)
+        f1_s = res.metrics.get("f1_macro_std", 0.0)
+        acc_m = res.metrics.get("accuracy_mean", 0.0)
+        acc_s = res.metrics.get("accuracy_std", 0.0)
+
+        lines.append(f"[{rank}] Combinación: {res.name}")
+        lines.append(f"    Algoritmo:      {model_display}")
+        lines.append(f"    Técnica NLP:    {tech_display}")
+        lines.append(f"    F1 Macro:       {f1_m:.4f} ± {f1_s:.4f}")
+        lines.append(f"    Accuracy:       {acc_m:.4f} ± {acc_s:.4f}")
+
+        if "f1_macro" in res.fold_metrics:
+            folds_f1 = ", ".join(f"{v:.4f}" for v in res.fold_metrics["f1_macro"])
+            lines.append(f"    Folds F1 Macro: [{folds_f1}]")
+        lines.append("-" * 85)
+
+    lines.append(
+        "(Nota metodológica: No se selecciona modelo definitivo ni se evalúa X_test en la Fase 3.5B)."
     )
     lines.append("=" * 85)
     return "\n".join(lines)
