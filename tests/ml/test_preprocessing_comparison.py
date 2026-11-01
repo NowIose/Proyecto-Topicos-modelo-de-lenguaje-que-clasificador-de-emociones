@@ -134,15 +134,23 @@ def test_preprocessing_techniques_contract() -> None:
     assert PREPROCESSING_TECHNIQUES == ("stemming", "lemmatization")
 
 
-def test_get_nlp_preprocessors_missing_in_current_state() -> None:
-    """Verifica que get_nlp_preprocessors retorna None mientras José no implemente src.nlp."""
-    preprocessors = get_nlp_preprocessors()
-    # Actualmente src/nlp/__init__.py está vacío
-    assert preprocessors is None
+def _simular_nlp_sin_preprocesadores(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Quita de src.nlp los nombres que busca get_nlp_preprocessors."""
+    import src.nlp as nlp
+
+    monkeypatch.delattr(nlp, "stemmer")
+    monkeypatch.delattr(nlp, "lemmatizer")
 
 
-def test_compare_preprocessing_techniques_missing_nlp_raises() -> None:
-    """Comprueba que si José aún no implementó el NLP, se lanza NotImplementedError explicativo."""
+def test_get_nlp_preprocessors_missing_in_current_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verifica que get_nlp_preprocessors retorna None si src.nlp no expone los preprocesadores."""
+    _simular_nlp_sin_preprocesadores(monkeypatch)
+    assert get_nlp_preprocessors() is None
+
+
+def test_compare_preprocessing_techniques_missing_nlp_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Comprueba que si src.nlp no expone el NLP, se lanza NotImplementedError explicativo."""
+    _simular_nlp_sin_preprocesadores(monkeypatch)
     X = ["Texto uno", "Texto dos", "Texto tres", "Texto cuatro"]
     y = ["positivo", "negativo", "positivo", "negativo"]
 

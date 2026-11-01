@@ -1,0 +1,535 @@
+{
+  "generado": "2026-11-01T22:47:30+00:00",
+  "modo": "completo",
+  "segundos_entrenamiento": 544.1,
+  "modelo_en_produccion": "logistic_regression",
+  "dataset": {
+    "fuente": "amazon_reviews_multi (es), reseñas de 1-2 estrellas negativas y 4-5 positivas",
+    "train": 128000,
+    "test": 32000,
+    "distribucion_train": {
+      "negativo": 64000,
+      "positivo": 64000
+    }
+  },
+  "nlp": {
+    "metodo_morfologico": "stemming",
+    "ngram_range": [
+      1,
+      2
+    ],
+    "max_features": 10000,
+    "min_df": 2,
+    "max_df": 0.9,
+    "sublinear_tf": true,
+    "vocabulario": 10000,
+    "stopwords": 381
+  },
+  "validacion": {
+    "cv_folds": 5,
+    "metrica_principal": "f1_macro",
+    "semilla": 42
+  },
+  "comparacion_morfologica": [
+    {
+      "metodo": "stemming",
+      "muestra": 20000,
+      "f1_macro": 0.8886,
+      "f1_macro_std": 0.0044,
+      "accuracy": 0.8886,
+      "vocabulario_distinto": 9482,
+      "segundos_preprocesamiento": 11.4
+    },
+    {
+      "metodo": "lematizacion",
+      "muestra": 20000,
+      "f1_macro": 0.8861,
+      "f1_macro_std": 0.0041,
+      "accuracy": 0.8861,
+      "vocabulario_distinto": 15722,
+      "segundos_preprocesamiento": 90.7
+    },
+    {
+      "metodo": "ninguno",
+      "muestra": 20000,
+      "f1_macro": 0.8831,
+      "f1_macro_std": 0.0054,
+      "accuracy": 0.8831,
+      "vocabulario_distinto": 19751,
+      "segundos_preprocesamiento": 1.6
+    }
+  ],
+  "experimentos": [
+    {
+      "modelo": "baseline",
+      "ngram_range": [
+        1,
+        1
+      ],
+      "representacion": "unigramas",
+      "f1_macro": 0.3333,
+      "f1_macro_std": 0.0,
+      "accuracy": 0.5
+    },
+    {
+      "modelo": "logistic_regression",
+      "ngram_range": [
+        1,
+        1
+      ],
+      "representacion": "unigramas",
+      "f1_macro": 0.8823,
+      "f1_macro_std": 0.0016,
+      "accuracy": 0.8823
+    },
+    {
+      "modelo": "multinomial_nb",
+      "ngram_range": [
+        1,
+        1
+      ],
+      "representacion": "unigramas",
+      "f1_macro": 0.8483,
+      "f1_macro_std": 0.0023,
+      "accuracy": 0.8483
+    },
+    {
+      "modelo": "baseline",
+      "ngram_range": [
+        1,
+        2
+      ],
+      "representacion": "unigramas + bigramas",
+      "f1_macro": 0.3333,
+      "f1_macro_std": 0.0,
+      "accuracy": 0.5
+    },
+    {
+      "modelo": "logistic_regression",
+      "ngram_range": [
+        1,
+        2
+      ],
+      "representacion": "unigramas + bigramas",
+      "f1_macro": 0.9069,
+      "f1_macro_std": 0.001,
+      "accuracy": 0.9069
+    },
+    {
+      "modelo": "multinomial_nb",
+      "ngram_range": [
+        1,
+        2
+      ],
+      "representacion": "unigramas + bigramas",
+      "f1_macro": 0.8888,
+      "f1_macro_std": 0.0019,
+      "accuracy": 0.8888
+    }
+  ],
+  "ajuste_hiperparametros": {
+    "logistic_regression": {
+      "parametro": "C",
+      "mejor_valor": 2.0,
+      "mejor_f1_cv": 0.9083,
+      "grilla": [
+        {
+          "valor": 0.5,
+          "f1_macro": 0.9043
+        },
+        {
+          "valor": 1.0,
+          "f1_macro": 0.9069
+        },
+        {
+          "valor": 2.0,
+          "f1_macro": 0.9083
+        },
+        {
+          "valor": 4.0,
+          "f1_macro": 0.908
+        },
+        {
+          "valor": 8.0,
+          "f1_macro": 0.9072
+        },
+        {
+          "valor": 16.0,
+          "f1_macro": 0.9051
+        }
+      ]
+    },
+    "multinomial_nb": {
+      "parametro": "alpha",
+      "mejor_valor": 1.0,
+      "mejor_f1_cv": 0.8888,
+      "grilla": [
+        {
+          "valor": 0.05,
+          "f1_macro": 0.8882
+        },
+        {
+          "valor": 0.1,
+          "f1_macro": 0.8882
+        },
+        {
+          "valor": 0.3,
+          "f1_macro": 0.8883
+        },
+        {
+          "valor": 0.5,
+          "f1_macro": 0.8885
+        },
+        {
+          "valor": 1.0,
+          "f1_macro": 0.8888
+        }
+      ]
+    }
+  },
+  "modelos": {
+    "baseline": {
+      "nombre": "Línea base (clase más frecuente)",
+      "en_produccion": false,
+      "hiperparametros": {
+        "strategy": "most_frequent"
+      },
+      "f1_cv": null,
+      "prueba": {
+        "accuracy": 0.5,
+        "precision_macro": 0.25,
+        "recall_macro": 0.5,
+        "f1_macro": 0.3333,
+        "por_clase": {
+          "positivo": {
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1_score": 0.0,
+            "support": 16000.0
+          },
+          "negativo": {
+            "precision": 0.5,
+            "recall": 1.0,
+            "f1_score": 0.6667,
+            "support": 16000.0
+          }
+        },
+        "matriz_confusion": {
+          "etiquetas": [
+            "positivo",
+            "negativo"
+          ],
+          "valores": [
+            [
+              0,
+              16000
+            ],
+            [
+              0,
+              16000
+            ]
+          ]
+        }
+      }
+    },
+    "logistic_regression": {
+      "nombre": "Regresión Logística",
+      "en_produccion": true,
+      "hiperparametros": {
+        "C": 2.0
+      },
+      "f1_cv": 0.9083,
+      "prueba": {
+        "accuracy": 0.911,
+        "precision_macro": 0.9111,
+        "recall_macro": 0.911,
+        "f1_macro": 0.911,
+        "por_clase": {
+          "positivo": {
+            "precision": 0.9188,
+            "recall": 0.9016,
+            "f1_score": 0.9101,
+            "support": 16000.0
+          },
+          "negativo": {
+            "precision": 0.9034,
+            "recall": 0.9203,
+            "f1_score": 0.9118,
+            "support": 16000.0
+          }
+        },
+        "matriz_confusion": {
+          "etiquetas": [
+            "positivo",
+            "negativo"
+          ],
+          "valores": [
+            [
+              14426,
+              1574
+            ],
+            [
+              1275,
+              14725
+            ]
+          ]
+        }
+      }
+    },
+    "multinomial_nb": {
+      "nombre": "Naive Bayes Multinomial",
+      "en_produccion": false,
+      "hiperparametros": {
+        "alpha": 1.0
+      },
+      "f1_cv": 0.8888,
+      "prueba": {
+        "accuracy": 0.8904,
+        "precision_macro": 0.8906,
+        "recall_macro": 0.8904,
+        "f1_macro": 0.8904,
+        "por_clase": {
+          "positivo": {
+            "precision": 0.8992,
+            "recall": 0.8794,
+            "f1_score": 0.8892,
+            "support": 16000.0
+          },
+          "negativo": {
+            "precision": 0.882,
+            "recall": 0.9014,
+            "f1_score": 0.8916,
+            "support": 16000.0
+          }
+        },
+        "matriz_confusion": {
+          "etiquetas": [
+            "positivo",
+            "negativo"
+          ],
+          "valores": [
+            [
+              14071,
+              1929
+            ],
+            [
+              1577,
+              14423
+            ]
+          ]
+        }
+      }
+    }
+  },
+  "analisis_errores": {
+    "total_errores": 2849,
+    "falsos_positivos": 1275,
+    "falsos_negativos": 1574,
+    "ejemplos_falsos_positivos": [
+      {
+        "texto": "Cumple perfectamente con su función",
+        "real": "negativo",
+        "predicho": "positivo",
+        "confianza": 0.9993
+      },
+      {
+        "texto": "Pieza perfecta todo en orden",
+        "real": "negativo",
+        "predicho": "positivo",
+        "confianza": 0.9984
+      },
+      {
+        "texto": "Para mi gusto brillan mucho, si es lo que buscas entonces es perfecta",
+        "real": "negativo",
+        "predicho": "positivo",
+        "confianza": 0.9979
+      },
+      {
+        "texto": "Me ha gustado, práctica",
+        "real": "negativo",
+        "predicho": "positivo",
+        "confianza": 0.9977
+      },
+      {
+        "texto": "buena calidad-precio estupenda para transportar portátil y otros pequeños enseres personales",
+        "real": "negativo",
+        "predicho": "positivo",
+        "confianza": 0.9976
+      },
+      {
+        "texto": "Sería perfecto si no fuera hinchable.",
+        "real": "negativo",
+        "predicho": "positivo",
+        "confianza": 0.9969
+      }
+    ],
+    "ejemplos_falsos_negativos": [
+      {
+        "texto": "Está marca nunca decepciona.",
+        "real": "positivo",
+        "predicho": "negativo",
+        "confianza": 0.9994
+      },
+      {
+        "texto": "Uno no funciona pero los tres ha sido eficaces",
+        "real": "positivo",
+        "predicho": "negativo",
+        "confianza": 0.9991
+      },
+      {
+        "texto": "El teléfono llegó en buen estado en su caja y precintado, pero al abrirlo no funcionó. He comenzado su devolución. Ha sido una gran decepción.",
+        "real": "positivo",
+        "predicho": "negativo",
+        "confianza": 0.9985
+      },
+      {
+        "texto": "No lo he devuelto porque por lo que vale me la quedaré pero ponía asa extensible y no es así, es de mano",
+        "real": "positivo",
+        "predicho": "negativo",
+        "confianza": 0.9984
+      },
+      {
+        "texto": "Aunque el semáforo no funciona",
+        "real": "positivo",
+        "predicho": "negativo",
+        "confianza": 0.9983
+      },
+      {
+        "texto": "No me llegó por un problema de aduanas y me devolvieron el dinero",
+        "real": "positivo",
+        "predicho": "negativo",
+        "confianza": 0.9973
+      }
+    ]
+  },
+  "terminos_influyentes": {
+    "positivo": [
+      {
+        "termino": "perfect",
+        "peso": 14.0309
+      },
+      {
+        "termino": "encant",
+        "peso": 10.4376
+      },
+      {
+        "termino": "buen",
+        "peso": 8.7945
+      },
+      {
+        "termino": "excelent",
+        "peso": 8.4097
+      },
+      {
+        "termino": "genial",
+        "peso": 8.3869
+      },
+      {
+        "termino": "recom",
+        "peso": 7.9021
+      },
+      {
+        "termino": "estupend",
+        "peso": 7.3418
+      },
+      {
+        "termino": "ideal",
+        "peso": 7.0185
+      },
+      {
+        "termino": "nad mal",
+        "peso": 6.9936
+      },
+      {
+        "termino": "no doy",
+        "peso": 6.5999
+      },
+      {
+        "termino": "gust",
+        "peso": 6.5361
+      },
+      {
+        "termino": "perfeccion",
+        "peso": 6.3777
+      },
+      {
+        "termino": "muy bien",
+        "peso": 6.3074
+      },
+      {
+        "termino": "cumpl",
+        "peso": 6.3022
+      },
+      {
+        "termino": "content",
+        "peso": 6.2625
+      }
+    ],
+    "negativo": [
+      {
+        "termino": "no recom",
+        "peso": -15.3197
+      },
+      {
+        "termino": "no",
+        "peso": -12.779
+      },
+      {
+        "termino": "no cumpl",
+        "peso": -11.4975
+      },
+      {
+        "termino": "decepcion",
+        "peso": -11.3522
+      },
+      {
+        "termino": "no volveri",
+        "peso": -8.8394
+      },
+      {
+        "termino": "dej funcion",
+        "peso": -8.749
+      },
+      {
+        "termino": "devuelt",
+        "peso": -8.5767
+      },
+      {
+        "termino": "no funcion",
+        "peso": -8.4073
+      },
+      {
+        "termino": "no buen",
+        "peso": -7.9331
+      },
+      {
+        "termino": "pesim",
+        "peso": -7.0648
+      },
+      {
+        "termino": "devolucion",
+        "peso": -6.9588
+      },
+      {
+        "termino": "dos estrell",
+        "peso": -6.8343
+      },
+      {
+        "termino": "rot",
+        "peso": -6.6227
+      },
+      {
+        "termino": "malisim",
+        "peso": -6.5877
+      },
+      {
+        "termino": "fatal",
+        "peso": -6.4757
+      }
+    ]
+  },
+  "versiones": {
+    "python": "3.11.15",
+    "scikit-learn": "1.5.2"
+  }
+}

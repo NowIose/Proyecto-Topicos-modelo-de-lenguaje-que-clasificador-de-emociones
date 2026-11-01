@@ -22,6 +22,7 @@ class DatasetConfig:
     text_column: str
     target_column: str
     labels: tuple[str, ...]
+    test_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -40,12 +41,30 @@ class ArtifactConfig:
 
     directory: Path
     pipeline_filename: str
+    metrics_filename: str = "metricas_modelo.json"
 
     @property
     def pipeline_path(self) -> Path:
         """Devuelve la ruta completa prevista, sin crear el artefacto."""
 
         return self.directory / self.pipeline_filename
+
+    @property
+    def metrics_path(self) -> Path:
+        """Ruta del JSON con las métricas que publica el backend."""
+        return self.directory / self.metrics_filename
+
+
+@dataclass(frozen=True)
+class NLPConfig:
+    """Parámetros del preprocesamiento y del TF-IDF del modelo en producción."""
+
+    metodo_morfologico: str = "stemming"
+    ngram_range: tuple[int, int] = (1, 2)
+    max_features: int = 10000
+    min_df: int | float = 2
+    max_df: int | float = 0.90
+    sublinear_tf: bool = True
 
 
 @dataclass(frozen=True)
@@ -55,6 +74,7 @@ class MLConfig:
     dataset: DatasetConfig
     experiment: ExperimentConfig
     artifacts: ArtifactConfig
+    nlp: NLPConfig = NLPConfig()
 
 
 def _require_mapping(value: Any, section: str) -> Mapping[str, Any]:
@@ -139,12 +159,20 @@ def load_config(path: str | Path = DEFAULT_CONFIG_PATH) -> MLConfig:
     if not pipeline_filename.endswith(".joblib"):
         raise ValueError("El pipeline previsto debe usar la extensión '.joblib'.")
 
+    test_path = (
+        _project_path(dataset["test_path"], "dataset.test_path")
+        if dataset.get("test_path") is not None
+        else None
+    )
+    metrics_filename = artifacts.get("metrics_filename", "metricas_modelo.json")
+
     return MLConfig(
         dataset=DatasetConfig(
             path=_project_path(dataset.get("path"), "dataset.path"),
             text_column=text_column,
             target_column=target_column,
             labels=labels,
+            test_path=test_path,
         ),
         experiment=ExperimentConfig(
             random_seed=random_seed,
@@ -155,5 +183,31 @@ def load_config(path: str | Path = DEFAULT_CONFIG_PATH) -> MLConfig:
         artifacts=ArtifactConfig(
             directory=_project_path(artifacts.get("directory"), "artifacts.directory"),
             pipeline_filename=pipeline_filename,
+            metrics_filename=_non_empty_string(metrics_filename, "artifacts.metrics_filename"),
         ),
+        nlp=_load_nlp_config(root.get("nlp")),
+    )
+
+
+def _load_nlp_config(raw: Any) -> NLPConfig:
+    """Lee la sección opcional 'nlp'; si falta, usa los valores por defecto."""
+    if raw is None:
+        return NLPConfig()
+    nlp = _require_mapping(raw, "nlp")
+    defaults = NLPConfig()
+    metodo = nlp.get("metodo_morfologico", defaults.metodo_morfologico)
+    if metodo not in ("stemming", "lematizacion", "ninguno"):
+        raise ValueError(
+            "'nlp.metodo_morfologico' debe ser 'stemming', 'lematizacion' o 'ninguno'."
+        )
+    ngram = tuple(nlp.get("ngram_range", defaults.ngram_range))
+    if len(ngram) != 2 or not 1 <= ngram[0] <= ngram[1]:
+        raise ValueError("'nlp.ngram_range' debe ser [min, max] con 1 <= min <= max.")
+    return NLPConfig(
+        metodo_morfologico=metodo,
+        ngram_range=(int(ngram[0]), int(ngram[1])),
+        max_features=int(nlp.get("max_features", defaults.max_features)),
+        min_df=nlp.get("min_df", defaults.min_df),
+        max_df=nlp.get("max_df", defaults.max_df),
+        sublinear_tf=bool(nlp.get("sublinear_tf", defaults.sublinear_tf)),
     )

@@ -220,8 +220,9 @@ def test_cli_main_missing_dataset_returns_error(
 
 def test_cli_main_default_missing_dataset(
     capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Por defecto apunta a data/reviews.csv que aún no existe
+    _config_con_dataset_inexistente(monkeypatch, "src.models.train")
     exit_code = main([])
 
     assert exit_code == 1
@@ -242,3 +243,20 @@ def test_cli_main_invalid_dataset_format(
     assert exit_code == 1
     captured = capsys.readouterr()
     assert "Error de validación del dataset:" in captured.err
+
+
+def _config_con_dataset_inexistente(monkeypatch: pytest.MonkeyPatch, *modulos: str) -> None:
+    """Hace que la config por defecto apunte a un CSV que no existe."""
+    import dataclasses
+    import importlib
+
+    from src.models.config import PROJECT_ROOT
+    from src.models.config import load_config as cargar_real
+
+    real = cargar_real()
+    falsa = dataclasses.replace(
+        real,
+        dataset=dataclasses.replace(real.dataset, path=PROJECT_ROOT / "data" / "no_existe.csv"),
+    )
+    for modulo in modulos:
+        monkeypatch.setattr(importlib.import_module(modulo), "load_config", lambda *a, **k: falsa)
