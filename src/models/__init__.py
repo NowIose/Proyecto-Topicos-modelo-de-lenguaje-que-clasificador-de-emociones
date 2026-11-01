@@ -2,7 +2,8 @@
 
 El paquete contiene contratos, configuración, validación de dataset, partición
 estratificada, pipelines candidatos de clasificación (Regresión Logística
-y Multinomial Naive Bayes) con TF-IDF, y funciones de evaluación y diagnóstico.
+y Multinomial Naive Bayes) con TF-IDF, evaluación, diagnóstico, validación
+cruzada estratificada y optimización de hiperparámetros con GridSearchCV.
 """
 
 from .config import DEFAULT_CONFIG_PATH, MLConfig, load_config
@@ -35,19 +36,32 @@ from .evaluate import (
     misclassifications_to_dataframe,
 )
 from .experiments import (
+    DEFAULT_PARAM_GRIDS,
     ExperimentResult,
     ExperimentSpec,
+    GridSearchResult,
     build_logistic_regression_pipeline,
     build_multinomial_nb_pipeline,
+    build_stratified_kfold,
     build_tfidf_vectorizer,
+    cross_validate_pipeline,
+    cv_results_to_dataframe,
+    evaluate_candidates_cv,
+    format_cv_comparison,
+    format_grid_search_comparison,
     get_candidate_pipelines,
+    get_default_param_grid,
     predict,
     predict_pipeline,
     predict_proba,
     predict_proba_pipeline,
     predict_probabilities,
+    run_cross_validation,
     run_experiments,
+    run_grid_search,
     train_pipeline,
+    tune_pipeline_grid_search,
+    validate_cv_sample_counts,
 )
 from .split import DatasetSplit, split_dataset
 
@@ -79,6 +93,19 @@ __all__ = [
     "predict_proba",
     "predict_proba_pipeline",
     "predict_probabilities",
+    "build_stratified_kfold",
+    "validate_cv_sample_counts",
+    "cross_validate_pipeline",
+    "run_cross_validation",
+    "evaluate_candidates_cv",
+    "format_cv_comparison",
+    "DEFAULT_PARAM_GRIDS",
+    "get_default_param_grid",
+    "GridSearchResult",
+    "cv_results_to_dataframe",
+    "tune_pipeline_grid_search",
+    "run_grid_search",
+    "format_grid_search_comparison",
     "EvaluationReport",
     "Misclassification",
     "compute_accuracy",
