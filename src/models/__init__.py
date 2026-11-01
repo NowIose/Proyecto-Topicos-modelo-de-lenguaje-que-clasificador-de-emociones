@@ -1,8 +1,8 @@
 """Herramientas de Machine Learning para el clasificador de sentimientos.
 
 El paquete contiene contratos, configuración, validación de dataset, partición
-estratificada y los pipelines candidatos de clasificación (Regresión Logística
-y Multinomial Naive Bayes) con TF-IDF.
+estratificada, pipelines candidatos de clasificación (Regresión Logística
+y Multinomial Naive Bayes) con TF-IDF, y funciones de evaluación y diagnóstico.
 """
 
 from .config import DEFAULT_CONFIG_PATH, MLConfig, load_config
@@ -16,6 +16,23 @@ from .dataset import (
     validate_no_duplicates,
     validate_no_empty_texts,
     validate_no_nulls,
+)
+from .evaluate import (
+    EvaluationReport,
+    Misclassification,
+    compute_accuracy,
+    compute_class_metrics,
+    compute_classification_report,
+    compute_confusion_matrix,
+    compute_f1_macro,
+    compute_f1_scores,
+    compute_f1_weighted,
+    evaluate,
+    evaluate_pipeline,
+    evaluate_predictions,
+    format_error_analysis,
+    identify_misclassifications,
+    misclassifications_to_dataframe,
 )
 from .experiments import (
     ExperimentResult,
@@ -62,4 +79,19 @@ __all__ = [
     "predict_proba",
     "predict_proba_pipeline",
     "predict_probabilities",
+    "EvaluationReport",
+    "Misclassification",
+    "compute_accuracy",
+    "compute_class_metrics",
+    "compute_classification_report",
+    "compute_confusion_matrix",
+    "compute_f1_macro",
+    "compute_f1_weighted",
+    "compute_f1_scores",
+    "evaluate",
+    "evaluate_pipeline",
+    "evaluate_predictions",
+    "identify_misclassifications",
+    "format_error_analysis",
+    "misclassifications_to_dataframe",
 ]
