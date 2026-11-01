@@ -276,8 +276,10 @@ def test_split_dataset_rejects_invalid_test_size(
         split_dataset(balanced_dataframe_10, test_size=invalid_test_size)
 
 
-def test_split_dataset_raises_file_not_found_on_missing_default_path() -> None:
-    # Al llamar sin data, intenta cargar data/reviews.csv que aún no existe
+def test_split_dataset_raises_file_not_found_on_missing_default_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _config_con_dataset_inexistente(monkeypatch, "src.models.split", "src.models.dataset")
     with pytest.raises(FileNotFoundError, match="El archivo del dataset no existe"):
         split_dataset()
 
@@ -287,3 +289,20 @@ def test_split_dataset_respects_custom_ml_config(balanced_dataframe_20: pd.DataF
     split = split_dataset(balanced_dataframe_20, config=cfg)
     assert len(split.X_train) == 16
     assert len(split.X_test) == 4
+
+
+def _config_con_dataset_inexistente(monkeypatch: pytest.MonkeyPatch, *modulos: str) -> None:
+    """Hace que la config por defecto apunte a un CSV que no existe."""
+    import dataclasses
+    import importlib
+
+    from src.models.config import PROJECT_ROOT
+    from src.models.config import load_config as cargar_real
+
+    real = cargar_real()
+    falsa = dataclasses.replace(
+        real,
+        dataset=dataclasses.replace(real.dataset, path=PROJECT_ROOT / "data" / "no_existe.csv"),
+    )
+    for modulo in modulos:
+        monkeypatch.setattr(importlib.import_module(modulo), "load_config", lambda *a, **k: falsa)
