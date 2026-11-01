@@ -24,3 +24,7 @@ htmlcov/
 # Archivos de sistema operativo
 .DS_Store
 Thumbs.db
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
