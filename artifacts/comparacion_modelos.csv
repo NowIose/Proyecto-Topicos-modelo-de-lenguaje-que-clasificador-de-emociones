@@ -1,0 +1,4 @@
+modelo,accuracy,precision_macro,recall_macro,f1_macro
+Línea base (clase más frecuente),0.5,0.25,0.5,0.3333
+Regresión Logística,0.911,0.9111,0.911,0.911
+Naive Bayes Multinomial,0.8904,0.8906,0.8904,0.8904

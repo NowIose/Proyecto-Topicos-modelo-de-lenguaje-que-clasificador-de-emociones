@@ -10,8 +10,12 @@ from src.nlp.stemming import aplicar_stemming, aplicar_stemming_texto
 from src.nlp.lematizacion import aplicar_lematizacion, aplicar_lematizacion_texto
 from src.nlp.vectorizacion import VectorizadorTFIDF
 from src.nlp.pipeline_nlp import PipelineNLP
+from src.nlp.preprocesador import PreprocesadorNLP, stemmer, lemmatizer
 
 __all__ = [
+    "PreprocesadorNLP",
+    "stemmer",
+    "lemmatizer",
     "limpiar_texto",
     "remover_tildes",
     "remover_urls",

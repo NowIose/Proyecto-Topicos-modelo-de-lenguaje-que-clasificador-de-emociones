@@ -333,8 +333,8 @@ def test_load_csv_raises_on_empty_file(tmp_path: Path) -> None:
         load_csv(empty_csv)
 
 
-def test_load_dataset_raises_when_default_file_missing() -> None:
-    # Por defecto apunta a data/reviews.csv que no existe aún en el repo
+def test_load_dataset_raises_when_default_file_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    _config_con_dataset_inexistente(monkeypatch, "src.models.dataset")
     with pytest.raises(FileNotFoundError, match="El archivo del dataset no existe"):
         load_dataset()
 
@@ -350,3 +350,20 @@ def test_load_dataset_raises_on_invalid_csv_data(tmp_path: Path) -> None:
 
     with pytest.raises(DatasetValidationError, match="Clases faltantes.*negativo"):
         load_dataset(csv_file)
+
+
+def _config_con_dataset_inexistente(monkeypatch: pytest.MonkeyPatch, *modulos: str) -> None:
+    """Hace que la config por defecto apunte a un CSV que no existe."""
+    import dataclasses
+    import importlib
+
+    from src.models.config import PROJECT_ROOT
+    from src.models.config import load_config as cargar_real
+
+    real = cargar_real()
+    falsa = dataclasses.replace(
+        real,
+        dataset=dataclasses.replace(real.dataset, path=PROJECT_ROOT / "data" / "no_existe.csv"),
+    )
+    for modulo in modulos:
+        monkeypatch.setattr(importlib.import_module(modulo), "load_config", lambda *a, **k: falsa)

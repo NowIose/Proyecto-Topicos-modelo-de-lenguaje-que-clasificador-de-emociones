@@ -1,7 +1,10 @@
-# Configuración compartida para experimentos futuros. No implica que el
-# dataset ni el artefacto existan todavía.
+# Configuración compartida del entrenamiento (python -m src.models.entrenar)
+# y de la API, que lee de aquí dónde están el modelo y sus métricas.
 dataset:
-  path: data/reviews.csv
+  # Partición estratificada 80/20 con semilla 42 generada en el Módulo 1
+  # (scripts/preparar_dataset_binario.py).
+  path: data/processed/train_binario.csv
+  test_path: data/processed/test_binario.csv
   text_column: texto
   target_column: sentimiento
   labels:
@@ -14,6 +17,17 @@ experiment:
   cv_folds: 5
   primary_metric: f1_macro
 
+# Preprocesamiento y TF-IDF del modelo que queda en producción.
+# Cambiar un valor aquí y reentrenar es todo lo que hace falta.
+nlp:
+  metodo_morfologico: stemming   # stemming | lematizacion | ninguno
+  ngram_range: [1, 2]            # [1, 1] solo unigramas, [1, 2] unigramas + bigramas
+  max_features: 10000            # tamaño máximo del vocabulario
+  min_df: 2                      # descarta términos que aparecen en menos de 2 reseñas
+  max_df: 0.90                   # descarta términos presentes en más del 90 % de reseñas
+  sublinear_tf: true             # usa 1 + log(tf) para suavizar frecuencias altas
+
 artifacts:
   directory: artifacts
-  pipeline_filename: sentiment_pipeline.joblib
+  pipeline_filename: modelo_sentimientos.joblib
+  metrics_filename: metricas_modelo.json
