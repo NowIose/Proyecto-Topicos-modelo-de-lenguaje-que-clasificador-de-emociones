@@ -18,6 +18,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from api.esquemas import (
     MAX_TEXTOS_POR_LOTE,
@@ -83,9 +84,13 @@ async def error_validacion(request: Request, exc: RequestValidationError):
     return JSONResponse(status_code=422, content={"error": "Entrada inválida", "detalle": detalle})
 
 
-@app.exception_handler(HTTPException)
-async def error_http(request: Request, exc: HTTPException):
-    return JSONResponse(status_code=exc.status_code, content={"error": exc.detail})
+@app.exception_handler(StarletteHTTPException)
+async def error_http(request: Request, exc: StarletteHTTPException):
+    # Cubre también los errores propios de Starlette (404, cuerpo ilegible, etc.).
+    mensajes = {400: "No se pudo leer el cuerpo de la solicitud. Envía JSON válido en UTF-8.",
+                404: "Ruta no encontrada. Consulta /docs para ver los endpoints."}
+    detalle = exc.detail if isinstance(exc, HTTPException) else mensajes.get(exc.status_code, exc.detail)
+    return JSONResponse(status_code=exc.status_code, content={"error": detalle})
 
 
 def requerir_modelo() -> None:

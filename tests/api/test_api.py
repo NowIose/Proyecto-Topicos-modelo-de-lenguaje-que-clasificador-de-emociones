@@ -166,3 +166,12 @@ def test_metrics_devuelve_el_json_del_entrenamiento(cliente):
     r = cliente.get("/api/metrics")
     assert r.status_code == 200
     assert r.json()["modelo_en_produccion"] == "logistic_regression"
+
+
+def test_cuerpo_ilegible_y_ruta_inexistente_responden_en_espanol(cliente):
+    r = cliente.post("/api/predict", content=b"\xff\xfe", headers={"Content-Type": "application/json"})
+    assert r.status_code in (400, 422)
+    assert "error" in r.json()
+    r = cliente.get("/api/no-existe")
+    assert r.status_code == 404
+    assert "Ruta no encontrada" in r.json()["error"]
