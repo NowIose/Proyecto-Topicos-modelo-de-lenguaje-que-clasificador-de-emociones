@@ -52,3 +52,14 @@ GitHub: `santiagoarteaga0704` · correo de commits: `santiagoarteaga0704@gmail.c
 
 Los commits de Santiago se hicieron con asistencia de Claude Code y lo declaran con la
 línea `Co-Authored-By: Claude` (ver sección 8 del informe técnico).
+
+---
+
+## Funcionalidad : Historial SQLite, Feedback y Exportación Avanzada (José)
+
+Implementación de persistencia local, interacción con el usuario y exportación de datos:
+
+- **Base de datos SQLite (`db/`):** Creación del módulo de base de datos local (`db/database.py`) usando la biblioteca estándar `sqlite3` sin dependencias externas pesadas, inicializado automáticamente por FastAPI (`api/main.py`) para registrar las reseñas analizadas (`/api/predict`, `/api/predict/lote`, `/api/predict/archivo`) de forma segura y no bloqueante.
+- **Sistema de retroalimentación (Feedback ):** Endpoints `/api/feedback` y `/api/history` para evaluar la precisión del modelo según el criterio del usuario, integrado visualmente en la tarjeta de veredicto (`Veredicto.jsx`).
+- **Pestaña de historial en frontend:** Componente `Historial.jsx` integrado en `App.jsx` que permite consultar en vivo el registro histórico de análisis, ver el veredicto, confianza, estado de calificación y vaciar la base de datos por sesión.
+- **Exportación CSV enriquecida:** Mejora en la descarga de archivos analizados por lote (`Archivo.jsx`) para incluir columnas detalladas de probabilidades (`prob_positivo`, `prob_negativo`) con codificación UTF-8 BOM compatible con Excel.

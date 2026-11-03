@@ -20,6 +20,7 @@ NEGATIVAS = ["pesimo no funciona nada", "malo se rompio enseguida", "no lo recom
 
 @pytest.fixture()
 def cliente(tmp_path, monkeypatch):
+    monkeypatch.setattr("db.database.RUTA_DB_DEFAULT", tmp_path / "test_historial.db")
     real = load_config()
     config = dataclasses.replace(real, artifacts=dataclasses.replace(real.artifacts, directory=tmp_path))
     pipe = build_logistic_regression_pipeline(preprocessor=PreprocesadorNLP("stemming"))
@@ -40,6 +41,7 @@ def cliente(tmp_path, monkeypatch):
 
 @pytest.fixture()
 def cliente_sin_modelo(tmp_path, monkeypatch):
+    monkeypatch.setattr("db.database.RUTA_DB_DEFAULT", tmp_path / "test_historial.db")
     real = load_config()
     config = dataclasses.replace(real, artifacts=dataclasses.replace(real.artifacts, directory=tmp_path / "vacio"))
     monkeypatch.setattr(api_main.servicio, "config", config)
@@ -175,3 +177,40 @@ def test_cuerpo_ilegible_y_ruta_inexistente_responden_en_espanol(cliente):
     r = cliente.get("/api/no-existe")
     assert r.status_code == 404
     assert "Ruta no encontrada" in r.json()["error"]
+
+
+# --------------------------------------------------- historial y feedback
+def test_historial_y_feedback_ciclo_completo(cliente):
+    # 1. Realizar una predicción individual
+    resp_pred = cliente.post("/api/predict", json={"texto": "excelente producto muy recomendado"})
+    assert resp_pred.status_code == 200
+    pred_id = resp_pred.json()["id"]
+    assert pred_id is not None
+
+    # 2. Consultar historial
+    resp_hist = cliente.get("/api/history")
+    assert resp_hist.status_code == 200
+    historial = resp_hist.json()
+    assert len(historial) >= 1
+    item = next(h for h in historial if h["id"] == pred_id)
+    assert item["sentimiento"] == "positivo"
+    assert item["feedback"] is None
+
+    # 3. Enviar feedback positivo
+    resp_fb = cliente.post("/api/feedback", json={"id": pred_id, "acertado": True})
+    assert resp_fb.status_code == 200
+    assert resp_fb.json()["feedback"] is True
+
+    # 4. Verificar que se actualizó el feedback
+    resp_hist2 = cliente.get("/api/history")
+    item2 = next(h for h in resp_hist2.json() if h["id"] == pred_id)
+    assert item2["feedback"] == 1
+
+    # 5. Feedback sobre ID inexistente da 404
+    resp_fb_err = cliente.post("/api/feedback", json={"id": 999999, "acertado": False})
+    assert resp_fb_err.status_code == 404
+
+    # 6. Limpiar historial
+    resp_del = cliente.delete("/api/history")
+    assert resp_del.status_code == 200
+    assert cliente.get("/api/history").json() == []
