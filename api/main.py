@@ -26,11 +26,21 @@ from api.esquemas import (
     EntradaTexto,
     Error,
     Estado,
+    FeedbackEntrada,
+    FeedbackRespuesta,
+    ItemHistorial,
     Prediccion,
     Preprocesamiento,
     ResultadoLote,
 )
 from api.servicio import ServicioModelo, TextoSinContenido
+from db.database import (
+    guardar_prediccion,
+    inicializar_bd,
+    limpiar_historial,
+    obtener_historial,
+    registrar_feedback,
+)
 
 VERSION_API = "1.0.0"
 MAX_BYTES_ARCHIVO = 1_000_000
@@ -43,6 +53,8 @@ servicio = ServicioModelo()
 async def ciclo_de_vida(app: FastAPI):
     # El modelo se carga una sola vez al arrancar, no en cada solicitud.
     servicio.cargar()
+    # Inicializar la tabla SQLite si aún no existe
+    inicializar_bd()
     yield
 
 
@@ -60,7 +72,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["*"],
 )
 
@@ -87,8 +99,10 @@ async def error_validacion(request: Request, exc: RequestValidationError):
 @app.exception_handler(StarletteHTTPException)
 async def error_http(request: Request, exc: StarletteHTTPException):
     # Cubre también los errores propios de Starlette (404, cuerpo ilegible, etc.).
-    mensajes = {400: "No se pudo leer el cuerpo de la solicitud. Envía JSON válido en UTF-8.",
-                404: "Ruta no encontrada. Consulta /docs para ver los endpoints."}
+    mensajes = {
+        400: "No se pudo leer el cuerpo de la solicitud. Envía JSON válido en UTF-8.",
+        404: "Ruta no encontrada. Consulta /docs para ver los endpoints.",
+    }
     detalle = exc.detail if isinstance(exc, HTTPException) else mensajes.get(exc.status_code, exc.detail)
     return JSONResponse(status_code=exc.status_code, content={"error": detalle})
 
@@ -126,7 +140,17 @@ def health():
 )
 def predict(entrada: EntradaTexto):
     requerir_modelo()
-    return predecir_o_422(servicio.predecir, entrada.texto)
+    res = predecir_o_422(servicio.predecir, entrada.texto)
+    # Guardar en SQLite (fail-safe)
+    id_guardado = guardar_prediccion(
+        texto=res["texto"],
+        sentimiento=res["sentimiento"],
+        confianza=res["confianza"],
+        prob_positivo=res["probabilidades"].get("positivo", 0.0),
+        prob_negativo=res["probabilidades"].get("negativo", 0.0),
+    )
+    res["id"] = id_guardado
+    return res
 
 
 @app.post(
@@ -138,7 +162,17 @@ def predict(entrada: EntradaTexto):
 )
 def predict_lote(entrada: EntradaLote):
     requerir_modelo()
-    return predecir_o_422(servicio.predecir_lote, entrada.textos)
+    res = predecir_o_422(servicio.predecir_lote, entrada.textos)
+    for p in res["predicciones"]:
+        id_g = guardar_prediccion(
+            texto=p["texto"],
+            sentimiento=p["sentimiento"],
+            confianza=p["confianza"],
+            prob_positivo=p["probabilidades"].get("positivo", 0.0),
+            prob_negativo=p["probabilidades"].get("negativo", 0.0),
+        )
+        p["id"] = id_g
+    return res
 
 
 def leer_textos_de_archivo(nombre: str, contenido: bytes) -> List[str]:
@@ -184,7 +218,17 @@ async def predict_archivo(archivo: UploadFile = File(..., description=".txt o .c
     except ValueError as exc:
         mensajes = [e["msg"].removeprefix("Value error, ") for e in exc.errors()]
         raise HTTPException(422, f"Archivo inválido: {' '.join(mensajes)}") from None
-    return predecir_o_422(servicio.predecir_lote, lote.textos)
+    res = predecir_o_422(servicio.predecir_lote, lote.textos)
+    for p in res["predicciones"]:
+        id_g = guardar_prediccion(
+            texto=p["texto"],
+            sentimiento=p["sentimiento"],
+            confianza=p["confianza"],
+            prob_positivo=p["probabilidades"].get("positivo", 0.0),
+            prob_negativo=p["probabilidades"].get("negativo", 0.0),
+        )
+        p["id"] = id_g
+    return res
 
 
 @app.post(
@@ -208,6 +252,44 @@ def preprocess(entrada: EntradaTexto):
 def metrics():
     requerir_modelo()
     return servicio.metricas
+
+
+# ------------------------------------------------------------------- Historial y Feedback (SQLite)
+@app.get(
+    "/api/history",
+    response_model=List[ItemHistorial],
+    tags=["Historial"],
+    summary="Consulta el historial de reseñas analizadas en SQLite",
+)
+def history(limite: int = 50):
+    return obtener_historial(limite=limite)
+
+
+@app.post(
+    "/api/feedback",
+    response_model=FeedbackRespuesta,
+    tags=["Historial"],
+    summary="Registra feedback de acierto/error sobre una predicción",
+)
+def feedback(entrada: FeedbackEntrada):
+    exito = registrar_feedback(entrada.id, entrada.acertado)
+    if not exito:
+        raise HTTPException(404, f"No se encontró la predicción con ID {entrada.id}")
+    return FeedbackRespuesta(
+        mensaje="Feedback registrado correctamente.",
+        id=entrada.id,
+        feedback=entrada.acertado,
+    )
+
+
+@app.delete(
+    "/api/history",
+    tags=["Historial"],
+    summary="Limpia los registros del historial en SQLite",
+)
+def clear_history():
+    limpiar_historial()
+    return {"mensaje": "Historial limpiado correctamente."}
 
 
 # Si el frontend ya fue compilado (frontend/dist), la API también lo sirve,

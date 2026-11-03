@@ -104,7 +104,7 @@ métricas. Después de reentrenar, reinicia `uvicorn` para que cargue el modelo 
 pytest
 ```
 
-Hay 233 pruebas: NLP (`tests/test_nlp.py`, `tests/test_preprocesador.py`), ML
+Hay 234 pruebas: NLP (`tests/test_nlp.py`, `tests/test_preprocesador.py`), ML
 (`tests/ml/`, incluido el entrenamiento de punta a punta) y API (`tests/api/`).
 
 ## Endpoints
@@ -145,6 +145,7 @@ curl -X POST http://localhost:8000/api/predict \
 ```
 ├── api/                 # FastAPI: main.py (endpoints), esquemas.py (validación), servicio.py (modelo)
 ├── artifacts/           # modelo_sentimientos.joblib, metricas_modelo.json, comparacion_modelos.csv
+├── db/                  # SQLite para historial persistente y feedback (database.py)
 ├── config/ml.yaml       # rutas, semilla, parámetros de NLP y TF-IDF
 ├── data/                # raw/ (Hugging Face), processed/ (train/test 80/20), features/
 ├── docs/                # informe técnico y planes de cada módulo

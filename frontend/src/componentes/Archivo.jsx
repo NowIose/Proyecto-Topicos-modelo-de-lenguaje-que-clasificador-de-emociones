@@ -2,12 +2,18 @@ import { useState } from "react";
 import { api, porcentaje } from "../api.js";
 
 function descargarCsv(predicciones) {
-  const escapar = (v) => `"${String(v).replaceAll('"', '""')}"`;
+  const escapar = (v) => `"${String(v ?? "").replaceAll('"', '""')}"`;
   const filas = [
-    ["texto", "sentimiento", "confianza"],
-    ...predicciones.map((p) => [p.texto, p.sentimiento, p.confianza]),
+    ["texto", "sentimiento", "confianza", "prob_positivo", "prob_negativo"],
+    ...predicciones.map((p) => [
+      p.texto,
+      p.sentimiento,
+      p.confianza,
+      p.probabilidades?.positivo ?? "",
+      p.probabilidades?.negativo ?? "",
+    ]),
   ];
-  const blob = new Blob(["﻿" + filas.map((f) => f.map(escapar).join(",")).join("\n")], {
+  const blob = new Blob(["\uFEFF" + filas.map((f) => f.map(escapar).join(",")).join("\n")], {
     type: "text/csv;charset=utf-8",
   });
   const enlace = document.createElement("a");
@@ -101,7 +107,7 @@ export default function Archivo() {
                   <tr key={i}>
                     <td className="tabla__texto">{p.texto}</td>
                     <td>
-                      <span className={`etiqueta etiqueta--${p.sentimiento === "positivo" ? "pos" : "neg"}`}>
+                      <span className={`insignia insignia--${p.sentimiento === "positivo" ? "pos" : "neg"}`}>
                         {p.sentimiento}
                       </span>
                     </td>

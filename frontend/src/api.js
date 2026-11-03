@@ -32,6 +32,9 @@ export const api = {
     datos.append("archivo", archivo);
     return pedir("/api/predict/archivo", { method: "POST", body: datos });
   },
+  historial: (limite = 50) => pedir(`/api/history?limite=${limite}`),
+  feedback: (id, acertado) => pedir("/api/feedback", json({ id, acertado })),
+  limpiarHistorial: () => pedir("/api/history", { method: "DELETE" }),
 };
 
 export const porcentaje = (valor, decimales = 1) => `${(valor * 100).toFixed(decimales)} %`;

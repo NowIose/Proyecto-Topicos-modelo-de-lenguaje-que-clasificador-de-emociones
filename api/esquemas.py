@@ -64,6 +64,7 @@ class TerminoClave(BaseModel):
 
 
 class Prediccion(BaseModel):
+    id: Optional[int] = Field(default=None, description="ID autogenerado en la base de datos SQLite.")
     texto: str
     sentimiento: str = Field(..., description="Clase predicha: 'positivo' o 'negativo'.")
     confianza: float = Field(..., description="Probabilidad de la clase predicha (0 a 1).")
@@ -105,3 +106,27 @@ class Estado(BaseModel):
 class Error(BaseModel):
     error: str
     detalle: Optional[List[str]] = None
+
+
+# --- Esquemas para Historial y Feedback (SQLite) ---
+
+class FeedbackEntrada(BaseModel):
+    id: int = Field(..., description="ID de la predicción en la base de datos SQLite.")
+    acertado: bool = Field(..., description="True si el modelo acertó, False si falló.")
+
+
+class FeedbackRespuesta(BaseModel):
+    mensaje: str
+    id: int
+    feedback: bool
+
+
+class ItemHistorial(BaseModel):
+    id: int
+    fecha: str
+    texto: str
+    sentimiento: str
+    confianza: float
+    prob_positivo: float
+    prob_negativo: float
+    feedback: Optional[int] = None

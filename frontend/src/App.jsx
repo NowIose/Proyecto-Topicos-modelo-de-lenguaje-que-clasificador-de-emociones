@@ -2,11 +2,13 @@ import { useEffect, useState } from "react";
 import { api } from "./api.js";
 import Analizar from "./componentes/Analizar.jsx";
 import Archivo from "./componentes/Archivo.jsx";
+import Historial from "./componentes/Historial.jsx";
 import Modelo from "./componentes/Modelo.jsx";
 
 const VISTAS = [
   { id: "analizar", nombre: "Analizar una reseña" },
   { id: "archivo", nombre: "Analizar un archivo" },
+  { id: "historial", nombre: "Historial de análisis" },
   { id: "modelo", nombre: "Cómo se entrenó" },
 ];
 
@@ -53,6 +55,7 @@ export default function App() {
       <main>
         {vista === "analizar" && <Analizar />}
         {vista === "archivo" && <Archivo />}
+        {vista === "historial" && <Historial />}
         {vista === "modelo" && <Modelo />}
       </main>
 

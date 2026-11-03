@@ -19,6 +19,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY config ./config
 COPY src ./src
 COPY api ./api
+COPY db ./db
 COPY artifacts ./artifacts
 COPY --from=frontend /frontend/dist ./frontend/dist
 
