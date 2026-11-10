@@ -1,5 +1,13 @@
 # CritiqAI — Clasificador de sentimientos de reseñas en español
 
+
+## VIDEO DEL PROYECTO EN FUNCIONAMIENTO SOLICITADO POR EL DOCENTE
+
+https://youtu.be/CrAsPT7CyQQ
+
+
+
+
 Aplicación web que clasifica reseñas de productos en español como **positivas** o
 **negativas**, muestra cómo el pipeline de NLP transforma el texto y explica qué palabras
 pesaron en la decisión.
